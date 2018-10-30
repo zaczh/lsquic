@@ -10,10 +10,13 @@
 
 #include "lsquic_int_types.h"
 #include "lsquic_packet_common.h"
+#include "lsquic_packet_gquic.h"
 #include "lsquic_packet_out.h"
 #include "lsquic_parse.h"
 #include "lsquic_conn_flow.h"
 #include "lsquic_sfcw.h"
+#include "lsquic_hq.h"
+#include "lsquic_varint.h"
 #include "lsquic_stream.h"
 #include "lsquic_types.h"
 #include "lsquic_malo.h"
@@ -92,7 +95,7 @@ elide_single_stream_frame (void)
     memset(streams, 0, sizeof(streams));
     memset(&enpub, 0, sizeof(enpub));
     lsquic_mm_init(&enpub.enp_mm);
-    packet_out = lsquic_mm_get_packet_out(&enpub.enp_mm, NULL, QUIC_MAX_PAYLOAD_SZ);
+    packet_out = lsquic_mm_get_packet_out(&enpub.enp_mm, NULL, GQUIC_MAX_PAYLOAD_SZ);
 
     setup_stream_contents(123, "Dude, where is my car?");
     len = pf->pf_gen_stream_frame(packet_out->po_data + packet_out->po_data_sz,
@@ -153,7 +156,7 @@ elide_three_stream_frames (int chop_regen)
      * compare payload and sizes:
      */
     {
-        ref_out = lsquic_mm_get_packet_out(&enpub.enp_mm, NULL, QUIC_MAX_PAYLOAD_SZ);
+        ref_out = lsquic_mm_get_packet_out(&enpub.enp_mm, NULL, GQUIC_MAX_PAYLOAD_SZ);
         /* This is fake data for regeneration */
         strcpy((char *) ref_out->po_data, "REGEN");
         ref_out->po_data_sz = ref_out->po_regen_sz = 5;
@@ -190,7 +193,7 @@ elide_three_stream_frames (int chop_regen)
      * stream objects to the packet.
      */
     {
-        packet_out = lsquic_mm_get_packet_out(&enpub.enp_mm, NULL, QUIC_MAX_PAYLOAD_SZ);
+        packet_out = lsquic_mm_get_packet_out(&enpub.enp_mm, NULL, GQUIC_MAX_PAYLOAD_SZ);
         /* This is fake data for regeneration */
         strcpy((char *) packet_out->po_data, "REGEN");
         packet_out->po_data_sz = packet_out->po_regen_sz = 5;

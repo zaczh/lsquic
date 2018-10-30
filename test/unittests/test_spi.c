@@ -11,11 +11,13 @@
 
 #include "lsquic.h"
 
-#include "lsquic_alarmset.h"
+#include "lsquic_int_types.h"
 #include "lsquic_packet_common.h"
 #include "lsquic_packet_in.h"
 #include "lsquic_conn_flow.h"
 #include "lsquic_sfcw.h"
+#include "lsquic_hq.h"
+#include "lsquic_varint.h"
 #include "lsquic_stream.h"
 #include "lsquic_types.h"
 #include "lsquic_spi.h"
@@ -26,6 +28,8 @@
  * (no need to deinitialize it).
  */
 static struct stream_prio_iter spi;
+
+static lsquic_cid_t cid;
 
 
 static lsquic_stream_t *
@@ -72,7 +76,7 @@ test_same_priority (unsigned priority)
     lsquic_spi_init(&spi, TAILQ_FIRST(&streams),
         TAILQ_LAST(&streams, lsquic_streams_tailq),
         (uintptr_t) &TAILQ_NEXT((lsquic_stream_t *) NULL, next_write_stream),
-        flags, 0, __func__);
+        flags, &cid, __func__);
 
     stream = lsquic_spi_first(&spi);
     assert(stream == stream_arr[0]);
@@ -88,7 +92,7 @@ test_same_priority (unsigned priority)
     /* Test reinitialization: */
     lsquic_spi_init(&spi, stream_arr[0], stream_arr[1],
         (uintptr_t) &TAILQ_NEXT((lsquic_stream_t *) NULL, next_write_stream),
-        flags, 0, __func__);
+        flags, &cid, __func__);
     stream = lsquic_spi_first(&spi);
     assert(stream == stream_arr[0]);
     stream = lsquic_spi_next(&spi);
@@ -122,7 +126,7 @@ test_different_priorities (int *priority)
     lsquic_spi_init(&spi, TAILQ_FIRST(&streams),
         TAILQ_LAST(&streams, lsquic_streams_tailq),
         (uintptr_t) &TAILQ_NEXT((lsquic_stream_t *) NULL, next_send_stream),
-        flags, 0, __func__);
+        flags, &cid, __func__);
 
     for (prev_prio = -1, count = 0, stream = lsquic_spi_first(&spi); stream;
                                         stream = lsquic_spi_next(&spi), ++count)
@@ -151,8 +155,8 @@ struct stream_info
 
 
 const struct stream_info infos1[] = {
-    { LSQUIC_STREAM_HANDSHAKE,    0, },
-    { LSQUIC_STREAM_HEADERS,      0, },
+    { LSQUIC_GQUIC_STREAM_HANDSHAKE,    0, },
+    { LSQUIC_GQUIC_STREAM_HEADERS,      0, },
     { 5,                          0, },
     { 7,                          1, },
     { 127,                        200, },
@@ -160,8 +164,8 @@ const struct stream_info infos1[] = {
 
 
 const struct stream_info infos2[] = {
-    { LSQUIC_STREAM_HANDSHAKE,    0, },
-    { LSQUIC_STREAM_HEADERS,      0, },
+    { LSQUIC_GQUIC_STREAM_HANDSHAKE,    0, },
+    { LSQUIC_GQUIC_STREAM_HEADERS,      0, },
     { 5,                          4, },
     { 7,                          1, },
     { 127,                        200, },
@@ -209,7 +213,7 @@ test_drop (const struct drop_test *test)
         lsquic_spi_init(&spi, TAILQ_FIRST(&streams),
             TAILQ_LAST(&streams, lsquic_streams_tailq),
             (uintptr_t) &TAILQ_NEXT((lsquic_stream_t *) NULL, next_write_stream),
-            STREAM_WRITE_Q_FLAGS, 0, __func__);
+            STREAM_WRITE_Q_FLAGS, &cid, __func__);
 
         if (drop_high)
             lsquic_spi_drop_high(&spi);

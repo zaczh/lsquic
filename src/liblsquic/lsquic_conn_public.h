@@ -16,6 +16,8 @@ struct lsquic_mm;
 struct lsquic_hash;
 struct headers_stream;
 struct lsquic_send_ctl;
+struct qpack_enc_hdl;
+struct qpack_dec_hdl;
 
 struct lsquic_conn_public {
     struct lsquic_streams_tailq     sending_streams,    /* Send RST_STREAM, BLOCKED, and WUF frames */
@@ -30,7 +32,15 @@ struct lsquic_conn_public {
     struct malo                    *packet_out_malo;
     struct lsquic_conn             *lconn;
     struct lsquic_mm               *mm;
-    struct headers_stream          *hs;
+    union {
+        struct {
+            struct headers_stream  *hs;
+        }                       gquic;
+        struct {
+            struct qpack_enc_hdl *qeh;
+            struct qpack_dec_hdl *qdh;
+        }                       ietf;
+    }                               u;
     struct lsquic_send_ctl         *send_ctl;
 };
 

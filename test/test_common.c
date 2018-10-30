@@ -1046,6 +1046,11 @@ set_engine_option (struct lsquic_engine_settings *settings,
             settings->es_max_sfcw = atoi(val);
             return 0;
         }
+        if (0 == strncmp(name, "scid_len", 8))
+        {
+            settings->es_scid_len = atoi(val);
+            return 0;
+        }
         break;
     case 10:
         if (0 == strncmp(name, "honor_prst", 10))
@@ -1063,6 +1068,11 @@ set_engine_option (struct lsquic_engine_settings *settings,
         if (0 == strncmp(name, "silent_close", 12))
         {
             settings->es_silent_close = atoi(val);
+            return 0;
+        }
+        if (0 == strncmp(name, "support_push", 12))
+        {
+            settings->es_support_push = atoi(val);
             return 0;
         }
         if (0 == strncmp(name, "support_nstp", 12))
@@ -1102,6 +1112,18 @@ set_engine_option (struct lsquic_engine_settings *settings,
             return 0;
         }
         break;
+    case 18:
+        if (0 == strncmp(name, "qpack_enc_max_size", 18))
+        {
+            settings->es_qpack_enc_max_size = atoi(val);
+            return 0;
+        }
+        if (0 == strncmp(name, "qpack_dec_max_size", 18))
+        {
+            settings->es_qpack_dec_max_size = atoi(val);
+            return 0;
+        }
+        break;
     case 20:
         if (0 == strncmp(name, "max_header_list_size", 20))
         {
@@ -1109,6 +1131,17 @@ set_engine_option (struct lsquic_engine_settings *settings,
             return 0;
         }
         break;
+    case 21:
+        if (0 == strncmp(name, "qpack_enc_max_blocked", 21))
+        {
+            settings->es_qpack_enc_max_blocked = atoi(val);
+            return 0;
+        }
+        if (0 == strncmp(name, "qpack_dec_max_blocked", 21))
+        {
+            settings->es_qpack_dec_max_blocked = atoi(val);
+            return 0;
+        }
     }
 
     return -1;

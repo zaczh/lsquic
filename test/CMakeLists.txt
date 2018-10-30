@@ -25,6 +25,7 @@ IF(NOT (CMAKE_C_FLAGS MATCHES "-DNDEBUG"))
     # Our test framework relies on assertions, only compile if assertions are
     # enabled.
     #
+    add_subdirectory(ietf)
     add_subdirectory(unittests)
     enable_testing()
 ENDIF()

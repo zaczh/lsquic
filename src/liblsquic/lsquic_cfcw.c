@@ -11,6 +11,8 @@
 #include "lsquic_rtt.h"
 #include "lsquic_conn_flow.h"
 #include "lsquic_sfcw.h"
+#include "lsquic_hq.h"
+#include "lsquic_varint.h"
 #include "lsquic_stream.h"
 #include "lsquic_conn_public.h"
 #include "lsquic_mm.h"
@@ -20,7 +22,7 @@
 #include "lsquic_ev_log.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_CFCW
-#define LSQUIC_LOG_CONN_ID fc->cf_conn_pub->lconn->cn_cid
+#define LSQUIC_LOG_CONN_ID &fc->cf_conn_pub->lconn->cn_cid
 #include "lsquic_logger.h"
 
 
