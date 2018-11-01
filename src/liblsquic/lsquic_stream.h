@@ -33,6 +33,35 @@ TAILQ_HEAD(lsquic_streams_tailq, lsquic_stream);
 typedef unsigned char sm_hist_idx_t;
 #endif
 
+/*
+ *  +----------+----------------------------------+
+ *  | Low Bits | Stream Type                      |
+ *  +----------+----------------------------------+
+ *  | 0x0      | Client-Initiated, Bidirectional  |
+ *  |          |                                  |
+ *  | 0x1      | Server-Initiated, Bidirectional  |
+ *  |          |                                  |
+ *  | 0x2      | Client-Initiated, Unidirectional |
+ *  |          |                                  |
+ *  | 0x3      | Server-Initiated, Unidirectional |
+ *  +----------+----------------------------------+
+ */
+
+enum stream_id_type
+{
+    SIT_BIDI_CLIENT,
+    SIT_BIDI_SERVER,
+    SIT_UNI_CLIENT,
+    SIT_UNI_SERVER,
+    N_SITS
+};
+
+#define SIT_MASK (N_SITS - 1)
+
+#define SIT_SHIFT 2
+
+enum stream_dir { SD_BIDI, SD_UNI, N_SDS };
+
 struct stream_hq_frame
 {
     /* At which point in the stream (sm_payload) to insert the HQ frame. */

@@ -3230,7 +3230,12 @@ int
 lsquic_stream_is_critical (const struct lsquic_stream *stream)
 {
     if (stream->stream_flags & STREAM_IETF)
-        return 0;   /* TODO */
+        /* XXX, OK, so we are cheating.  The test should also check that the
+         * connection is an HTTP connection, but we just assume it for
+         * speed, as the code is never really used for non-HTTP stuff.
+         */
+        return (stream->stream_flags & STREAM_CRYPTO)
+            || ((stream->id >> 1) & 1) == SD_UNI;
     else
         return lsquic_stream_id_is_critical(
             stream->stream_flags & STREAM_USE_HEADERS,
@@ -3365,7 +3370,12 @@ hq_read (void *ctx, const unsigned char *buf, size_t sz, int fin)
     {
         LSQ_INFO("FIN at unexpected place in filter; state: %u",
                                                         filter->hqfi_state);
-        /* TODO: abort connection? */
+/* From [draft-ietf-quic-http-16] Section 3.1:
+ *               When a stream terminates cleanly, if the last frame on
+ * the stream was truncated, this MUST be treated as a connection error
+ * (see HTTP_MALFORMED_FRAME in Section 8.1).
+ */
+        abort_connection(stream);
     }
 
     return p - buf;

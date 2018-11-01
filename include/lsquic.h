@@ -121,6 +121,11 @@ enum lsquic_version
     LSQVER_ID15,
 
     /**
+     * IETF QUIC Draft-16
+     */
+    LSQVER_ID16,
+
+    /**
      * Special version to trigger version negotiation.
      * [draft-ietf-quic-transport-11], Section 3.
      */
@@ -140,7 +145,7 @@ enum lsquic_version
  */
 #define LSQUIC_FORCED_TCID0_VERSIONS (1 << LSQVER_044)
 
-#define LSQUIC_EXPERIMENTAL_VERSIONS ((1 << LSQVER_ID15) | \
+#define LSQUIC_EXPERIMENTAL_VERSIONS ((1 << LSQVER_ID15) | (1 << LSQVER_ID16) |\
                             (1 << LSQVER_VERNEG) | LSQUIC_EXPERIMENTAL_Q098)
 
 #define LSQUIC_DEPRECATED_VERSIONS 0
@@ -148,7 +153,8 @@ enum lsquic_version
 #define LSQUIC_GQUIC_HEADER_VERSIONS ( \
                 (1 << LSQVER_035) | (1 << LSQVER_039) | (1 << LSQVER_043))
 
-#define LSQUIC_IETF_VERSIONS ((1 << LSQVER_ID15) | (1 << LSQVER_VERNEG))
+#define LSQUIC_IETF_VERSIONS ((1 << LSQVER_ID16) | (1 << LSQVER_ID15) | \
+                                                        (1 << LSQVER_VERNEG))
 
 /**
  * @struct lsquic_stream_if
@@ -230,8 +236,6 @@ struct lsquic_stream_if {
 /* XXX What's a good value here? */
 #define LSQUIC_DF_INIT_MAX_STREAM_DATA_UNI_CLIENT   (32 * 1024)
 #define LSQUIC_DF_INIT_MAX_STREAM_DATA_UNI_SERVER   0
-
-#define LSQUIC_DF_ACK_DELAY_EXP 3
 
 /**
  * Default idle connection time in seconds.
@@ -550,15 +554,6 @@ struct lsquic_engine_settings {
      * Maximum value is 600 seconds.
      */
     unsigned        es_idle_timeout;
-
-    /**
-     * ACK delay exponent.
-     *
-     * This is a transport parameter.
-     *
-     * Default value is @ref LSQUIC_DF_ACK_DELAY_EXP.
-     */
-    unsigned char   es_ack_delay_exp;
 
     /**
      * Source Connection ID length.  Only applicable to the IETF QUIC

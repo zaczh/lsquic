@@ -109,9 +109,11 @@ enum ifull_conn_flags
 
 #define SET_ERRMSG(conn, ...) do {                                          \
     if (!(conn)->ifc_errmsg)                                                \
+    {                                                                       \
         (conn)->ifc_errmsg = malloc(MAX_ERRMSG);                            \
-    if ((conn)->ifc_errmsg)                                                 \
-        snprintf((conn)->ifc_errmsg, MAX_ERRMSG, __VA_ARGS__);              \
+        if ((conn)->ifc_errmsg)                                             \
+            snprintf((conn)->ifc_errmsg, MAX_ERRMSG, __VA_ARGS__);          \
+    }                                                                       \
 } while (0)
 
 #define ABORT_WITH_FLAG(conn, log_level, flag, ...) do {                    \
@@ -126,34 +128,23 @@ enum ifull_conn_flags
 #define ABORT_WARN(...) \
     ABORT_WITH_FLAG(conn, LSQ_LOG_WARN, IFC_ERROR, __VA_ARGS__)
 
-/*
- *  +----------+----------------------------------+
- *  | Low Bits | Stream Type                      |
- *  +----------+----------------------------------+
- *  | 0x0      | Client-Initiated, Bidirectional  |
- *  |          |                                  |
- *  | 0x1      | Server-Initiated, Bidirectional  |
- *  |          |                                  |
- *  | 0x2      | Client-Initiated, Unidirectional |
- *  |          |                                  |
- *  | 0x3      | Server-Initiated, Unidirectional |
- *  +----------+----------------------------------+
- */
-
-enum stream_id_type
+/* [draft-ietf-quic-transport-16] Section 20 */
+enum trans_error_code
 {
-    SIT_BIDI_CLIENT,
-    SIT_BIDI_SERVER,
-    SIT_UNI_CLIENT,
-    SIT_UNI_SERVER,
-    N_SITS
+    TEC_NO_ERROR                   =  0x0,
+    TEC_INTERNAL_ERROR             =  0x1,
+    TEC_SERVER_BUSY                =  0x2,
+    TEC_FLOW_CONTROL_ERROR         =  0x3,
+    TEC_STREAM_ID_ERROR            =  0x4,
+    TEC_STREAM_STATE_ERROR         =  0x5,
+    TEC_FINAL_OFFSET_ERROR         =  0x6,
+    TEC_FRAME_ENCODING_ERROR       =  0x7,
+    TEC_TRANSPORT_PARAMETER_ERROR  =  0x8,
+    TEC_VERSION_NEGOTIATION_ERROR  =  0x9,
+    TEC_PROTOCOL_VIOLATION         =  0xA,
+    TEC_INVALID_MIGRATION          =  0xC,
 };
 
-#define SIT_MASK (N_SITS - 1)
-
-#define SIT_SHIFT 2
-
-enum stream_dir { SD_BIDI, SD_UNI, N_SDS };
 
 static enum stream_id_type
 gen_sit (unsigned server, enum stream_dir sd)
@@ -188,6 +179,7 @@ struct ietf_full_conn
     lsquic_stream_id_t          ifc_max_allowed_stream_id[N_SITS];
     uint64_t                    ifc_max_stream_data_uni;
     enum ifull_conn_flags       ifc_flags;
+    enum trans_error_code       ifc_tec;
     unsigned                    ifc_n_delayed_streams;
     unsigned                    ifc_n_cons_unretx;
     const struct lsquic_stream_if
@@ -396,6 +388,25 @@ generate_stream_id (struct ietf_full_conn *conn, enum stream_dir sd)
     return id << SIT_SHIFT
          | sd << 1
         ;
+}
+
+
+static lsquic_stream_id_t
+avail_streams_count (const struct ietf_full_conn *conn, int server,
+                                                            enum stream_dir sd)
+{
+    enum stream_id_type sit;
+    lsquic_stream_id_t max_count;
+
+    sit = gen_sit(server, sd);
+    max_count = conn->ifc_max_allowed_stream_id[sit] >> SIT_SHIFT;
+    if (max_count >= conn->ifc_n_created_streams[sd])
+        return max_count - conn->ifc_n_created_streams[sd];
+    else
+    {
+        assert(0);
+        return 0;
+    }
 }
 
 
@@ -812,9 +823,10 @@ either_side_going_away (const struct ietf_full_conn *conn)
 static void
 maybe_create_delayed_streams (struct ietf_full_conn *conn)
 {
-    unsigned avail;
+    unsigned avail, delayed;
 
-    if (0 == conn->ifc_n_delayed_streams)
+    delayed = conn->ifc_n_delayed_streams;
+    if (0 == delayed)
         return;
 
     avail = ietf_full_conn_ci_n_avail_streams(&conn->ifc_conn);
@@ -833,6 +845,10 @@ maybe_create_delayed_streams (struct ietf_full_conn *conn)
             break;
         }
     }
+
+    LSQ_DEBUG("created %u delayed stream%.*s",
+        delayed - conn->ifc_n_delayed_streams,
+        delayed - conn->ifc_n_delayed_streams != 1, "s");
 }
 
 
@@ -875,7 +891,7 @@ service_streams (struct ietf_full_conn *conn)
             (void) conn->ifc_stream_if->on_new_stream(conn->ifc_stream_ctx,
                                                                         NULL);
         }
-    else
+    else if ((conn->ifc_flags & (IFC_HTTP|IFC_HAVE_PEER_SET)) != IFC_HTTP)
         maybe_create_delayed_streams(conn);
 }
 
@@ -1060,6 +1076,14 @@ ietf_full_conn_ci_handshake_ok (struct lsquic_conn *lconn)
 
     if (conn->ifc_flags & IFC_HTTP)
     {
+        if (0 == avail_streams_count(conn, conn->ifc_flags & IFC_SERVER,
+                                                                    SD_UNI))
+        {
+            ABORT_WARN("cannot create control stream due to peer-imposed "
+                                                                    "limit");
+            conn->ifc_tec = TEC_TRANSPORT_PARAMETER_ERROR;
+            return;
+        }
         if (0 != create_ctl_stream_out(conn))
         {
             ABORT_WARN("cannot create outgoing control stream");
@@ -1079,14 +1103,21 @@ ietf_full_conn_ci_handshake_ok (struct lsquic_conn *lconn)
             ABORT_WARN("cannot initialize QPACK decoder");
             return;
         }
-        if (0 != create_qdec_stream_out(conn))
+        if (avail_streams_count(conn, conn->ifc_flags & IFC_SERVER, SD_UNI) > 0)
         {
-            ABORT_WARN("cannot create outgoing QPACK decoder stream");
-            return;
+            if (0 != create_qdec_stream_out(conn))
+            {
+                ABORT_WARN("cannot create outgoing QPACK decoder stream");
+                return;
+            }
         }
+        else
+            LSQ_DEBUG("cannot create outgoing QPACK decoder stream due to "
+                "unidir limits");
     }
 
-    maybe_create_delayed_streams(conn);
+    if ((conn->ifc_flags & (IFC_HTTP|IFC_HAVE_PEER_SET)) != IFC_HTTP)
+        maybe_create_delayed_streams(conn);
 }
 
 
@@ -1125,57 +1156,63 @@ ietf_full_conn_ci_is_tickable (struct lsquic_conn *lconn)
 static enum tick_st
 immediate_close (struct ietf_full_conn *conn)
 {
-#if 0       /* TODO */
-    lsquic_packet_out_t *packet_out;
+    struct lsquic_packet_out *packet_out;
     const char *error_reason;
-    unsigned error_code;
+    enum trans_error_code error_code;
     int sz;
 
-    if (conn->fc_flags & (FC_TICK_CLOSE|FC_GOT_PRST))
+    if (conn->ifc_flags & (IFC_TICK_CLOSE|IFC_GOT_PRST))
         return TICK_CLOSE;
 
-    conn->fc_flags |= FC_TICK_CLOSE;
+    conn->ifc_flags |= IFC_TICK_CLOSE;
 
     /* No reason to send anything that's been scheduled if connection is
      * being closed immedately.  This also ensures that packet numbers
      * sequence is always increasing.
      */
-    lsquic_send_ctl_drop_scheduled(&conn->fc_send_ctl);
+    lsquic_send_ctl_drop_scheduled(&conn->ifc_send_ctl);
 
-    if ((conn->fc_flags & FC_TIMED_OUT) && conn->fc_settings->es_silent_close)
+    if ((conn->ifc_flags & IFC_TIMED_OUT)
+                                    && conn->ifc_settings->es_silent_close)
         return TICK_CLOSE;
 
-    packet_out = lsquic_send_ctl_new_packet_out(&conn->fc_send_ctl, 0);
+    packet_out = lsquic_send_ctl_new_packet_out(&conn->ifc_send_ctl, 0,
+                                                                    PNS_APP);
     if (!packet_out)
     {
         LSQ_WARN("cannot allocate packet: %s", strerror(errno));
         return TICK_CLOSE;
     }
 
-    assert(conn->fc_flags & (FC_ERROR|FC_ABORTED|FC_TIMED_OUT));
-    if (conn->fc_flags & FC_ERROR)
+    assert(conn->ifc_flags & (IFC_ERROR|IFC_ABORTED|IFC_TIMED_OUT));
+    if (conn->ifc_tec != TEC_NO_ERROR)
     {
-        error_code = 0x01; /* QUIC_INTERNAL_ERROR */
+        error_code = conn->ifc_tec;
+        error_reason = conn->ifc_errmsg;
+    }
+    else if (conn->ifc_flags & IFC_ERROR)
+    {
+        error_code = TEC_INTERNAL_ERROR;
         error_reason = "connection error";
     }
-    else if (conn->fc_flags & FC_ABORTED)
+    else if (conn->ifc_flags & IFC_ABORTED)
     {
-        error_code = 0x10; /* QUIC_PEER_GOING_AWAY */
+        error_code = TEC_NO_ERROR;
         error_reason = "user aborted connection";
     }
-    else if (conn->fc_flags & FC_TIMED_OUT)
+    else if (conn->ifc_flags & IFC_TIMED_OUT)
     {
-        error_code = 0x19; /* QUIC_NETWORK_IDLE_TIMEOUT */
+        error_code = TEC_NO_ERROR;
         error_reason = "connection timed out";
     }
     else
     {
-        error_code = 0x10; /* QUIC_PEER_GOING_AWAY */
+        error_code = TEC_NO_ERROR;
         error_reason = NULL;
     }
 
-    lsquic_send_ctl_scheduled_one(&conn->fc_send_ctl, packet_out);
-    sz = conn->fc_conn.cn_pf->pf_gen_connect_close_frame(
+    lsquic_send_ctl_scheduled_one(&conn->ifc_send_ctl, packet_out);
+    sz = conn->ifc_conn.cn_pf->pf_gen_connect_close_frame(
                      packet_out->po_data + packet_out->po_data_sz,
                      lsquic_packet_out_avail(packet_out), error_code,
                      error_reason, error_reason ? strlen(error_reason) : 0);
@@ -1183,12 +1220,10 @@ immediate_close (struct ietf_full_conn *conn)
         LSQ_WARN("%s failed", __func__);
         return TICK_CLOSE;
     }
-    lsquic_send_ctl_incr_pack_sz(&conn->fc_send_ctl, packet_out, sz);
+    lsquic_send_ctl_incr_pack_sz(&conn->ifc_send_ctl, packet_out, sz);
     packet_out->po_frame_types |= 1 << QUIC_FRAME_CONNECTION_CLOSE;
     LSQ_DEBUG("generated CONNECTION_CLOSE frame in its own packet");
     return TICK_SEND|TICK_CLOSE;
-#endif
-    return TICK_CLOSE;
 }
 
 
@@ -1305,7 +1340,27 @@ conn_ok_to_close (const struct ietf_full_conn *conn)
 static void
 generate_connection_close_packet (struct ietf_full_conn *conn)
 {
-    LSQ_WARN("%s: TODO", __func__);   /* TODO */
+    struct lsquic_packet_out *packet_out;
+    int sz;
+
+    packet_out = lsquic_send_ctl_new_packet_out(&conn->ifc_send_ctl, 0, PNS_APP);
+    if (!packet_out)
+    {
+        ABORT_ERROR("cannot allocate packet: %s", strerror(errno));
+        return;
+    }
+
+    lsquic_send_ctl_scheduled_one(&conn->ifc_send_ctl, packet_out);
+    sz = conn->ifc_conn.cn_pf->pf_gen_connect_close_frame(
+                packet_out->po_data + packet_out->po_data_sz,
+                lsquic_packet_out_avail(packet_out), TEC_NO_ERROR, NULL, 0);
+    if (sz < 0) {
+        ABORT_ERROR("generate_connection_close_packet failed");
+        return;
+    }
+    lsquic_send_ctl_incr_pack_sz(&conn->ifc_send_ctl, packet_out, sz);
+    packet_out->po_frame_types |= 1 << QUIC_FRAME_CONNECTION_CLOSE;
+    LSQ_DEBUG("generated CONNECTION_CLOSE frame in its own packet");
 }
 
 
@@ -1953,6 +2008,51 @@ process_connection_close_frame (struct ietf_full_conn *conn,
 }
 
 
+/* This is just a copy of process_connection_close_frame().  We treat it
+ * the same way we do CONNECTION_CLOSE frame.  APPLICATION_CLOSE is going
+ * away in -17.
+ */
+static unsigned
+process_application_close_frame (struct ietf_full_conn *conn,
+        struct lsquic_packet_in *packet_in, const unsigned char *p, size_t len)
+{
+    lsquic_stream_t *stream;
+    struct lsquic_hash_elem *el;
+    uint32_t error_code;
+    uint16_t reason_len;
+    uint8_t reason_off;
+    int parsed_len;
+
+    parsed_len = conn->ifc_conn.cn_pf->pf_parse_app_close_frame(p, len,
+                                        &error_code, &reason_len, &reason_off);
+    if (parsed_len < 0)
+        return 0;
+    LSQ_INFO("Received APPLICATION_CLOSE frame (code: %u; reason: %.*s)",
+                error_code, (int) reason_len, (const char *) p + reason_off);
+    conn->ifc_flags |= IFC_RECV_CLOSE;
+    if (!(conn->ifc_flags & IFC_CLOSING))
+    {
+        for (el = lsquic_hash_first(conn->ifc_pub.all_streams); el;
+                             el = lsquic_hash_next(conn->ifc_pub.all_streams))
+        {
+            stream = lsquic_hashelem_getdata(el);
+            lsquic_stream_shutdown_internal(stream);
+        }
+        conn->ifc_flags |= IFC_CLOSING;
+    }
+    return parsed_len;
+}
+
+
+static unsigned
+process_NOT_IMPLEMENTED (struct ietf_full_conn *conn,
+        struct lsquic_packet_in *packet_in, const unsigned char *p, size_t len)
+{
+    LSQ_WARN("frame 0x%X is not implemented", *p);
+    return 0;
+}
+
+
 typedef unsigned (*process_frame_f)(
     struct ietf_full_conn *, struct lsquic_packet_in *,
     const unsigned char *p, size_t);
@@ -1963,25 +2063,19 @@ static process_frame_f const process_frames[N_QUIC_FRAMES] =
     [QUIC_FRAME_PADDING]            =  process_padding_frame,
     [QUIC_FRAME_RST_STREAM]         =  process_rst_stream_frame,
     [QUIC_FRAME_CONNECTION_CLOSE]   =  process_connection_close_frame,
-    /*
-    [QUIC_FRAME_APPLICATION_CLOSE]  =
-    [QUIC_FRAME_MAX_DATA]           =
-    [QUIC_FRAME_MAX_STREAM_DATA]    =
-    [QUIC_FRAME_MAX_STREAM_ID]      =
-    */
+    [QUIC_FRAME_APPLICATION_CLOSE]  =  process_application_close_frame,
+    [QUIC_FRAME_MAX_DATA]           =  process_NOT_IMPLEMENTED,
+    [QUIC_FRAME_MAX_STREAM_DATA]    =  process_NOT_IMPLEMENTED,
+    [QUIC_FRAME_MAX_STREAM_ID]      =  process_NOT_IMPLEMENTED,
     [QUIC_FRAME_PING]               =  process_ping_frame,
-    /*
-    [QUIC_FRAME_BLOCKED]            =
-    [QUIC_FRAME_STREAM_BLOCKED]     =
-    [QUIC_FRAME_STREAM_ID_BLOCKED]  =
-    [QUIC_FRAME_NEW_CONNECTION_ID]  =
-    [QUIC_FRAME_STOP_SENDING]       =
-    */
+    [QUIC_FRAME_BLOCKED]            =  process_NOT_IMPLEMENTED,
+    [QUIC_FRAME_STREAM_BLOCKED]     =  process_NOT_IMPLEMENTED,
+    [QUIC_FRAME_STREAM_ID_BLOCKED]  =  process_NOT_IMPLEMENTED,
+    [QUIC_FRAME_NEW_CONNECTION_ID]  =  process_NOT_IMPLEMENTED,
+    [QUIC_FRAME_STOP_SENDING]       =  process_NOT_IMPLEMENTED,
     [QUIC_FRAME_ACK]                =  process_ack_frame,
     [QUIC_FRAME_PATH_CHALLENGE]     =  process_path_challenge_frame,
-    /*
-    [QUIC_FRAME_PATH_RESPONSE]      =
-    */
+    [QUIC_FRAME_PATH_RESPONSE]      =  process_NOT_IMPLEMENTED,
     [QUIC_FRAME_STREAM]             =  process_stream_frame,
     [QUIC_FRAME_CRYPTO]             =  process_crypto_frame,
 };
@@ -1995,6 +2089,7 @@ process_packet_frame (struct ietf_full_conn *conn,
     enum QUIC_FRAME_TYPE type = conn->ifc_conn.cn_pf->pf_parse_frame_type(p[0]);
     if (lsquic_legal_frames_by_level[enc_level] & (1 << type))
     {
+        LSQ_DEBUG("about to process %s frame", frame_type_2_str[type]);
         packet_in->pi_frame_types |= 1 << type;
         return process_frames[type](conn, packet_in, p, len);
     }
@@ -2604,18 +2699,7 @@ static unsigned
 ietf_full_conn_ci_n_avail_streams (const struct lsquic_conn *lconn)
 {
     struct ietf_full_conn *const conn = (struct ietf_full_conn *) lconn;
-    enum stream_id_type sit;
-    lsquic_stream_id_t max_count;
-
-    sit = gen_sit(!(conn->ifc_flags & IFC_SERVER), SD_BIDI);
-    max_count = conn->ifc_max_allowed_stream_id[sit] >> SIT_SHIFT;
-    if (max_count >= conn->ifc_n_created_streams[SD_BIDI])
-        return max_count - conn->ifc_n_created_streams[SD_BIDI];
-    else
-    {
-        assert(0);
-        return 0;
-    }
+    return avail_streams_count(conn, !(conn->ifc_flags & IFC_SERVER), SD_BIDI);
 }
 
 
@@ -2624,8 +2708,9 @@ ietf_full_conn_ci_make_stream (struct lsquic_conn *lconn)
 {
     struct ietf_full_conn *const conn = (struct ietf_full_conn *) lconn;
 
-    if ((lconn->cn_flags & LSCONN_HANDSHAKE_DONE) &&
-                                ietf_full_conn_ci_n_avail_streams(lconn) > 0)
+    if ((lconn->cn_flags & LSCONN_HANDSHAKE_DONE)
+        && (conn->ifc_flags & (IFC_HTTP|IFC_HAVE_PEER_SET)) != IFC_HTTP
+        && ietf_full_conn_ci_n_avail_streams(lconn) > 0)
     {
         if (0 != create_bidi_stream_out(conn))
             ABORT_ERROR("could not create new stream: %s", strerror(errno));
@@ -2724,8 +2809,14 @@ on_settings_frame (void *ctx)
             conn->ifc_peer_hq_settings.header_table_size,
             dyn_table_size, max_risked_streams, conn->ifc_flags & IFC_SERVER))
         ABORT_WARN("could not initialize QPACK encoder handler");
-    if (0 != create_qenc_stream_out(conn))
-        ABORT_WARN("cannot create outgoing QPACK encoder stream");
+    if (avail_streams_count(conn, conn->ifc_flags & IFC_SERVER, SD_UNI) > 0)
+    {
+        if (0 != create_qenc_stream_out(conn))
+            ABORT_WARN("cannot create outgoing QPACK encoder stream");
+    }
+    else
+        LSQ_DEBUG("cannot create QPACK encoder stream due to unidir limit");
+    maybe_create_delayed_streams(conn);
 }
 
 

@@ -331,7 +331,7 @@ gen_trans_params (struct enc_sess_iquic *enc_sess, unsigned char *buf,
     params.tp_init_max_bidi_streams
                             = settings->es_init_max_streams_bidi;
     params.tp_ack_delay_exponent
-                            = settings->es_ack_delay_exp;
+                            = TP_DEF_ACK_DELAY_EXP;
     params.tp_idle_timeout  = settings->es_idle_timeout;
     params.tp_max_ack_delay = TP_DEF_MAX_ACK_DELAY;
     params.tp_max_packet_size = 1370 /* XXX: based on socket */;

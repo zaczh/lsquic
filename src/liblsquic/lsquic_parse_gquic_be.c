@@ -690,8 +690,8 @@ gquic_be_gen_ping_frame (unsigned char *buf, int buf_len)
 
 
 int
-gquic_be_gen_connect_close_frame (unsigned char *buf, int buf_len, uint32_t error_code,
-                            const char *reason, int reason_len)
+gquic_be_gen_connect_close_frame (unsigned char *buf, size_t buf_len,
+                    uint32_t error_code, const char *reason, int reason_len)
 {
     unsigned char *p = buf;
     if (buf_len < 7)
@@ -713,7 +713,7 @@ gquic_be_gen_connect_close_frame (unsigned char *buf, int buf_len, uint32_t erro
     p += 2;
     memcpy(p, reason, reason_len);
     p += reason_len;
-    if (buf_len < p - buf)
+    if (buf_len < (unsigned) (p - buf))
         return -2;
 
     return p - buf;

@@ -857,33 +857,42 @@ id15_gen_ping_frame (unsigned char *buf, int buf_len)
 
 
 static int
-id15_gen_connect_close_frame (unsigned char *buf, int buf_len, uint32_t error_code,
-                            const char *reason, int reason_len)
+id15_gen_connect_close_frame (unsigned char *buf, size_t buf_len,
+                    uint32_t error_code, const char *reason, int reason_len)
 {
-    assert(0);  /* Not implemented for ID-11 yet */
-    unsigned char *p = buf;
-    if (buf_len < 7)
+    size_t needed;
+    unsigned bits;
+    uint16_t ecode;
+    unsigned char *p;
+
+    assert(!!reason == !!reason_len);
+
+    bits = vint_val2bits(reason_len);
+    needed = 1 /* Type */ + sizeof(ecode) /* Error code */ + 1 /* Frame type */
+        /* TODO: frame type instead of just zero */ + (1 << bits) + reason_len;
+
+    if (buf_len < needed)
         return -1;
 
+    p = buf;
     *p = 0x02;
     ++p;
+    ecode = error_code;
 #if __BYTE_ORDER == __LITTLE_ENDIAN
-    error_code = bswap_32(error_code);
+    ecode = bswap_16(ecode);
 #endif
-    memcpy(p, &error_code, 4);
-    p += 4;
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-    const uint16_t copy = bswap_16(reason_len);
-    memcpy(p, &copy, 2);
-#else
-    memcpy(p, &reason_len, 2);
-#endif
-    p += 2;
-    memcpy(p, reason, reason_len);
-    p += reason_len;
-    if (buf_len < p - buf)
-        return -2;
+    memcpy(p, &ecode, sizeof(ecode));
+    p += sizeof(ecode);
+    *p++ = 0;   /* Frame type */ /* TODO */
+    vint_write(p, reason_len, bits, 1 << bits);
+    p += 1 << bits;
+    if (reason_len)
+    {
+        memcpy(p, reason, reason_len);
+        p += reason_len;
+    }
 
+    assert((unsigned) (p - buf) == needed);
     return p - buf;
 }
 
@@ -899,7 +908,50 @@ id15_parse_connect_close_frame (const unsigned char *buf, size_t buf_len,
     ptrdiff_t off;
     int r;
 
-    if (buf_len < 4)
+    if (buf_len < 1 + 2 + 1 + 1)
+        return -1;
+
+    p = buf + 1;
+    memcpy(&code, p, 2);
+    p += 2;
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+    code = bswap_16(code);
+#endif
+
+    /* Read and throw away the frame type that caused closure. (TODO) */
+    r = vint_read(p, pend, &len);
+    if (r < 0)
+        return -1;
+    p += r;
+
+    r = vint_read(p, pend, &len);
+    if (r < 0)
+        return -1;
+    p += r;
+
+    off = p - buf;
+    if (buf_len < off + len)
+        return -2;
+
+    *error_code = code;
+    *reason_len = len;
+    *reason_offset = off;
+    return off + len;
+}
+
+
+static int
+id15_parse_app_close_frame (const unsigned char *buf, size_t buf_len,
+        uint32_t *error_code, uint16_t *reason_len, uint8_t *reason_offset)
+{
+    const unsigned char *const pend = buf + buf_len;
+    const unsigned char *p;
+    uint64_t len;
+    uint16_t code;
+    ptrdiff_t off;
+    int r;
+
+    if (buf_len < 1 + 2 + 1)
         return -1;
 
     p = buf + 1;
@@ -1202,6 +1254,7 @@ const struct parse_funcs lsquic_parse_funcs_id15 =
     .pf_parse_rst_frame               =  id15_parse_rst_frame,
     .pf_gen_connect_close_frame       =  id15_gen_connect_close_frame,
     .pf_parse_connect_close_frame     =  id15_parse_connect_close_frame,
+    .pf_parse_app_close_frame         =  id15_parse_app_close_frame,
     .pf_gen_goaway_frame              =  id15_gen_goaway_frame,
     .pf_parse_goaway_frame            =  id15_parse_goaway_frame,
     .pf_gen_ping_frame                =  id15_gen_ping_frame,

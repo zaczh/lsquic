@@ -137,10 +137,15 @@ struct parse_funcs
     (*pf_parse_rst_frame) (const unsigned char *buf, size_t buf_len,
         lsquic_stream_id_t *stream_id, uint64_t *offset, uint32_t *error_code);
     int
-    (*pf_gen_connect_close_frame) (unsigned char *buf, int buf_len,
+    (*pf_gen_connect_close_frame) (unsigned char *buf, size_t buf_len,
                 uint32_t error_code, const char *reason, int reason_len);
     int
     (*pf_parse_connect_close_frame) (const unsigned char *buf, size_t buf_len,
+                uint32_t *error_code, uint16_t *reason_length,
+                uint8_t *reason_offset);
+    /* This will go away in -17, but for the interop so be it */
+    int
+    (*pf_parse_app_close_frame) (const unsigned char *buf, size_t buf_len,
                 uint32_t *error_code, uint16_t *reason_length,
                 uint8_t *reason_offset);
     int

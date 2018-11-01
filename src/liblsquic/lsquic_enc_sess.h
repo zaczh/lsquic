@@ -201,6 +201,7 @@ extern const struct enc_session_funcs_iquic lsquic_enc_session_iquic_id15;
 
 #define select_esf_common_by_ver(ver) ( \
     ver == LSQVER_ID15 ? &lsquic_enc_session_common_id15 : \
+    ver == LSQVER_ID16 ? &lsquic_enc_session_common_id15 : \
     ver == LSQVER_VERNEG ? &lsquic_enc_session_common_id15 : \
     &lsquic_enc_session_common_gquic_1 )
 

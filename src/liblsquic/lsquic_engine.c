@@ -229,7 +229,6 @@ lsquic_engine_init_settings (struct lsquic_engine_settings *settings,
                                  = LSQUIC_DF_INIT_MAX_STREAMS_UNI;
     settings->es_init_max_streams_bidi
                                  = LSQUIC_DF_INIT_MAX_STREAMS_BIDI;
-    settings->es_ack_delay_exp   = LSQUIC_DF_ACK_DELAY_EXP;
     settings->es_scid_len        = LSQUIC_DF_SCID_LEN;
     settings->es_qpack_dec_max_size = LSQUIC_DF_QPACK_DEC_MAX_SIZE;
     settings->es_qpack_dec_max_blocked = LSQUIC_DF_QPACK_DEC_MAX_BLOCKED;
