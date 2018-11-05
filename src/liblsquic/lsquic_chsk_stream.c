@@ -11,6 +11,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/queue.h>
 
 #include "lsquic_int_types.h"
 #include "lsquic.h"
@@ -19,11 +20,12 @@
 #include "lsquic_enc_sess.h"
 #include "lsquic_chsk_stream.h"
 #include "lsquic_ver_neg.h"
+#include "lsquic_hash.h"
 #include "lsquic_conn.h"
 #include "lsquic_mm.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_HSK_ADAPTER
-#define LSQUIC_LOG_CONN_ID lsquic_conn_id(c_hsk->lconn)
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(c_hsk->lconn)
 #include "lsquic_logger.h"
 
 

@@ -17,16 +17,16 @@
 #include "lsquic_rechist.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_RECHIST
-#define LSQUIC_LOG_CONN_ID rechist->rh_cid
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(rechist->rh_conn)
 #include "lsquic_logger.h"
 
 
 void
-lsquic_rechist_init (struct lsquic_rechist *rechist, const lsquic_cid_t *cid,
-                                                                    int ietf)
+lsquic_rechist_init (struct lsquic_rechist *rechist,
+                                    const struct lsquic_conn *conn, int ietf)
 {
     memset(rechist, 0, sizeof(*rechist));
-    rechist->rh_cid = cid;
+    rechist->rh_conn = conn;
     rechist->rh_cutoff = ietf ? 0 : 1;
     lsquic_packints_init(&rechist->rh_pints);
     LSQ_DEBUG("instantiated received packet history");

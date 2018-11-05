@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/queue.h>
 
 #include <openssl/chacha.h>
 #include <openssl/hkdf.h>
@@ -18,6 +19,7 @@
 #include "lsquic_hkdf.h"
 #include "lsquic.h"
 #include "lsquic_int_types.h"
+#include "lsquic_hash.h"
 #include "lsquic_conn.h"
 #include "lsquic_enc_sess.h"
 #include "lsquic_parse.h"
@@ -35,7 +37,7 @@
 #include "lsquic_ver_neg.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_HANDSHAKE
-#define LSQUIC_LOG_CONN_ID &enc_sess->esi_conn->cn_scid
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(enc_sess->esi_conn)
 #include "lsquic_logger.h"
 
 /* [draft-ietf-quic-tls-11] Section 5.3.2 */
@@ -1000,14 +1002,14 @@ iquic_esf_decrypt_packet (enc_session_t *enc_session_p,
     packet_in->pi_data = dst;
     packet_in->pi_flags |= PI_OWN_DATA | PI_DECRYPTED
                         | (pair->ykp_enc_level << PIBIT_ENC_LEV_SHIFT);
-    EV_LOG_CONN_EVENT(&lconn->cn_cid, "decrypted packet %"PRIu64,
+    EV_LOG_CONN_EVENT(LSQUIC_LOG_CONN_ID, "decrypted packet %"PRIu64,
                                                     packet_in->pi_packno);
     return 0;
 
   err:
     if (dst)
         lsquic_mm_put_1370(&enpub->enp_mm, dst);
-    EV_LOG_CONN_EVENT(&lconn->cn_cid, "could not decrypt packet (type %s, "
+    EV_LOG_CONN_EVENT(LSQUIC_LOG_CONN_ID, "could not decrypt packet (type %s, "
         "number %"PRIu64")", lsquic_hety2str[packet_in->pi_header_type],
                                                     packet_in->pi_packno);
     return -1;
@@ -1045,6 +1047,7 @@ iquic_esfi_assign_scid (const struct lsquic_engine_public *enpub,
                                                     struct lsquic_conn *lconn)
 {
     generate_cid(&lconn->cn_scid, enpub->enp_settings.es_scid_len);
+    lconn->cn_cces_mask = 1;    /* XXX */
     LSQ_LOG1C(LSQ_LOG_DEBUG, "generated and assigned SCID %"CID_FMT,
                                                     CID_BITS(&lconn->cn_scid));
 }

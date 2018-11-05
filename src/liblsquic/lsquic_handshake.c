@@ -132,6 +132,7 @@ typedef struct lsquic_session_cache_info_st
     struct lsquic_str    sstk;
     struct lsquic_str    scfg;
     struct lsquic_str    sni_key;   /* This is only used as key */
+    struct lsquic_hash_elem hash_el;
 
 } lsquic_session_cache_info_t;
 
@@ -321,7 +322,7 @@ make_cert_hash_item (lsquic_str_t *domain, lsquic_str_t **certs, int count)
 {
     int i;
     uint64_t hash;
-    cert_hash_item_t *item = (cert_hash_item_t *)malloc(sizeof(cert_hash_item_t));
+    cert_hash_item_t *item = calloc(1, sizeof(*item));
     item->crts = (lsquic_str_t *)malloc(count * sizeof(lsquic_str_t));
     item->domain = lsquic_str_new(NULL, 0);
     item->hashs = lsquic_str_new(NULL, 0);
@@ -360,7 +361,7 @@ c_insert_certs (cert_hash_item_t *item)
 {
     if (lsquic_hash_insert(s_cached_client_certs,
             lsquic_str_cstr(item->domain),
-                lsquic_str_len(item->domain), item) == NULL)
+                lsquic_str_len(item->domain), item, &item->hash_el) == NULL)
         return -1;
     else
         return 0;
@@ -381,7 +382,7 @@ static int save_session_info_entry(lsquic_str_t *key, lsquic_session_cache_info_
     lsquic_str_setto(&entry->sni_key, lsquic_str_cstr(key), lsquic_str_len(key));
     if (lsquic_hash_insert(s_cached_client_session_infos,
             lsquic_str_cstr(&entry->sni_key),
-                lsquic_str_len(&entry->sni_key), entry) == NULL)
+                lsquic_str_len(&entry->sni_key), entry, &entry->hash_el) == NULL)
     {
         lsquic_str_d(&entry->sni_key);
         return -1;

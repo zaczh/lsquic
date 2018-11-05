@@ -1130,6 +1130,11 @@ set_engine_option (struct lsquic_engine_settings *settings,
             settings->es_max_header_list_size = atoi(val);
             return 0;
         }
+        if (0 == strncmp(name, "init_max_streams_uni", 20))
+        {
+            settings->es_init_max_streams_uni = atoi(val);
+            return 0;
+        }
         break;
     case 21:
         if (0 == strncmp(name, "qpack_enc_max_blocked", 21))

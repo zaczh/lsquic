@@ -18,6 +18,8 @@
 #include "lsquic_sfcw.h"
 #include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hash.h"
+#include "lsquic_conn.h"
 #include "lsquic_stream.h"
 #include "lsquic_types.h"
 #include "lsquic_spi.h"
@@ -29,7 +31,7 @@
  */
 static struct stream_prio_iter spi;
 
-static lsquic_cid_t cid;
+static struct lsquic_conn lconn = LSCONN_INITIALIZER_CIDLEN(lconn, 0);
 
 
 static lsquic_stream_t *
@@ -76,7 +78,7 @@ test_same_priority (unsigned priority)
     lsquic_spi_init(&spi, TAILQ_FIRST(&streams),
         TAILQ_LAST(&streams, lsquic_streams_tailq),
         (uintptr_t) &TAILQ_NEXT((lsquic_stream_t *) NULL, next_write_stream),
-        flags, &cid, __func__);
+        flags, &lconn, __func__);
 
     stream = lsquic_spi_first(&spi);
     assert(stream == stream_arr[0]);
@@ -92,7 +94,7 @@ test_same_priority (unsigned priority)
     /* Test reinitialization: */
     lsquic_spi_init(&spi, stream_arr[0], stream_arr[1],
         (uintptr_t) &TAILQ_NEXT((lsquic_stream_t *) NULL, next_write_stream),
-        flags, &cid, __func__);
+        flags, &lconn, __func__);
     stream = lsquic_spi_first(&spi);
     assert(stream == stream_arr[0]);
     stream = lsquic_spi_next(&spi);
@@ -126,7 +128,7 @@ test_different_priorities (int *priority)
     lsquic_spi_init(&spi, TAILQ_FIRST(&streams),
         TAILQ_LAST(&streams, lsquic_streams_tailq),
         (uintptr_t) &TAILQ_NEXT((lsquic_stream_t *) NULL, next_send_stream),
-        flags, &cid, __func__);
+        flags, &lconn, __func__);
 
     for (prev_prio = -1, count = 0, stream = lsquic_spi_first(&spi); stream;
                                         stream = lsquic_spi_next(&spi), ++count)
@@ -213,7 +215,7 @@ test_drop (const struct drop_test *test)
         lsquic_spi_init(&spi, TAILQ_FIRST(&streams),
             TAILQ_LAST(&streams, lsquic_streams_tailq),
             (uintptr_t) &TAILQ_NEXT((lsquic_stream_t *) NULL, next_write_stream),
-            STREAM_WRITE_Q_FLAGS, &cid, __func__);
+            STREAM_WRITE_Q_FLAGS, &lconn, __func__);
 
         if (drop_high)
             lsquic_spi_drop_high(&spi);

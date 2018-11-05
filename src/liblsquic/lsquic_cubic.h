@@ -6,6 +6,8 @@
 #ifndef LSQUIC_CUBIC_H
 #define LSQUIC_CUBIC_H 1
 
+struct lsquic_conn;
+
 struct lsquic_cubic {
     lsquic_time_t   cu_min_delay;
     lsquic_time_t   cu_epoch_start;
@@ -15,7 +17,8 @@ struct lsquic_cubic {
     unsigned long   cu_cwnd;
     unsigned long   cu_tcp_cwnd;
     unsigned long   cu_ssthresh;
-    const lsquic_cid_t *cu_cid;            /* Used for logging */
+    const struct lsquic_conn
+                   *cu_conn;            /* Used for logging */
     enum cubic_flags {
         CU_TCP_FRIENDLY = (1 << 0),
     }               cu_flags;

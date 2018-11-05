@@ -19,7 +19,7 @@
 #include "lsquic_cong_ctl.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_CUBIC
-#define LSQUIC_LOG_CONN_ID cubic->cu_cid
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(cubic->cu_conn)
 #include "lsquic_logger.h"
 
 #define FAST_CONVERGENCE        1
@@ -32,7 +32,7 @@
 static void
 cubic_reset (struct lsquic_cubic *cubic)
 {
-    memset(cubic, 0, offsetof(struct lsquic_cubic, cu_cid));
+    memset(cubic, 0, offsetof(struct lsquic_cubic, cu_conn));
     cubic->cu_cwnd          = 32 * TCP_MSS;
     cubic->cu_last_max_cwnd = 32 * TCP_MSS;
     cubic->cu_tcp_cwnd      = 32 * TCP_MSS;
@@ -104,12 +104,12 @@ lsquic_cubic_set_flags (struct lsquic_cubic *cubic, enum cubic_flags flags)
 
 
 static void
-lsquic_cubic_init (void *cong_ctl, const lsquic_cid_t *cid)
+lsquic_cubic_init (void *cong_ctl, const struct lsquic_conn *conn)
 {
     struct lsquic_cubic *const cubic = cong_ctl;
     cubic_reset(cubic);
     cubic->cu_ssthresh = 10000 * TCP_MSS; /* Emulate "unbounded" slow start */
-    cubic->cu_cid   = cid;
+    cubic->cu_conn  = conn;
     cubic->cu_flags = DEFAULT_CUBIC_FLAGS;
 #ifndef NDEBUG
     const char *s;
@@ -119,7 +119,7 @@ lsquic_cubic_init (void *cong_ctl, const lsquic_cid_t *cid)
     else
 #endif
         cubic->cu_sampling_rate = 100000;
-    LSQ_DEBUG("%s(cubic, $cid)", __func__);
+    LSQ_DEBUG("%s(cubic, $conn)", __func__);
     LSQ_INFO("initialized");
 }
 

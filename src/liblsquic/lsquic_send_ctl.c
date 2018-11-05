@@ -28,18 +28,18 @@
 #include "lsquic_sfcw.h"
 #include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_ver_neg.h"
 #include "lsquic_ev_log.h"
 #include "lsquic_conn.h"
 #include "lsquic_conn_flow.h"
 #include "lsquic_conn_public.h"
-#include "lsquic_hash.h"
 #include "lsquic_cong_ctl.h"
 #include "lsquic_enc_sess.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_SENDCTL
-#define LSQUIC_LOG_CONN_ID &ctl->sc_conn_pub->lconn->cn_cid
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(ctl->sc_conn_pub->lconn)
 #include "lsquic_logger.h"
 
 #define MAX_RESUBMITTED_ON_RTO  2
@@ -309,9 +309,9 @@ lsquic_send_ctl_init (lsquic_send_ctl_t *ctl, struct lsquic_alarmset *alset,
     lsquic_alarmset_init_alarm(alset, AL_RETX_APP, retx_alarm_rings, ctl);
     lsquic_senhist_init(&ctl->sc_senhist, ctl->sc_flags & SC_IETF);
     ctl->sc_ci = &lsquic_cong_cubic_if;
-    ctl->sc_ci->cci_init(CGP(ctl), LSQUIC_LOG_CONN_ID);
+    ctl->sc_ci->cci_init(CGP(ctl), conn_pub->lconn);
     if (ctl->sc_flags & SC_PACE)
-        pacer_init(&ctl->sc_pacer, LSQUIC_LOG_CONN_ID, 100000);
+        pacer_init(&ctl->sc_pacer, conn_pub->lconn, 100000);
     for (i = 0; i < sizeof(ctl->sc_buffered_packets) /
                                 sizeof(ctl->sc_buffered_packets[0]); ++i)
         TAILQ_INIT(&ctl->sc_buffered_packets[i].bpq_packets);
@@ -1709,7 +1709,7 @@ lsquic_send_ctl_drop_scheduled (lsquic_send_ctl_t *ctl)
     }
     assert(0 == ctl->sc_n_scheduled);
     ctl->sc_cur_packno = lsquic_senhist_largest(&ctl->sc_senhist);
-    LSQ_DEBUG("dropped %u scheduled packet%s", n, n != 0 ? "s" : "");
+    LSQ_DEBUG("dropped %u scheduled packet%s", n, n != 1 ? "s" : "");
 }
 
 

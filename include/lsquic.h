@@ -235,7 +235,7 @@ struct lsquic_stream_if {
 #define LSQUIC_DF_INIT_MAX_STREAMS_UNI 100
 /* XXX What's a good value here? */
 #define LSQUIC_DF_INIT_MAX_STREAM_DATA_UNI_CLIENT   (32 * 1024)
-#define LSQUIC_DF_INIT_MAX_STREAM_DATA_UNI_SERVER   0
+#define LSQUIC_DF_INIT_MAX_STREAM_DATA_UNI_SERVER   (12 * 1024)
 
 /**
  * Default idle connection time in seconds.

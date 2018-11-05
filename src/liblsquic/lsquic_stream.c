@@ -37,6 +37,7 @@
 #include "lsquic_sfcw.h"
 #include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_conn_public.h"
 #include "lsquic_util.h"
@@ -63,7 +64,7 @@
 #include "lsquic_byteswap.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_STREAM
-#define LSQUIC_LOG_CONN_ID &stream->conn_pub->lconn->cn_cid
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(stream->conn_pub->lconn)
 #define LSQUIC_LOG_STREAM_ID stream->id
 #include "lsquic_logger.h"
 
@@ -3345,6 +3346,7 @@ hq_read (void *ctx, const unsigned char *buf, size_t sz, int fin)
                 default:
                     assert(HIS_ERROR == his);
                     filter->hqfi_flags |= HQFI_FLAG_ERROR;
+                    LSQ_INFO("error processing header block");
                     abort_connection(stream);   /* XXX Overkill? */
                     goto end;
                 }
@@ -3447,7 +3449,7 @@ hq_filter_df (struct lsquic_stream *stream, struct data_frame *data_frame)
         if (filter->hqfi_state == HQFI_STATE_READING_PAYLOAD
                                         && filter->hqfi_type == HQFT_DATA)
             return MIN(filter->hqfi_left,
-                                data_frame->df_size - data_frame->df_read_off);
+                    (unsigned) data_frame->df_size - data_frame->df_read_off);
         else
         {
             assert(data_frame->df_read_off == data_frame->df_size);

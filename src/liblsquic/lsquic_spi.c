@@ -19,11 +19,12 @@
 #include "lsquic_sfcw.h"
 #include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_spi.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_SPI
-#define LSQUIC_LOG_CONN_ID iter->spi_cid
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(iter->spi_conn)
 #include "lsquic_logger.h"
 
 #define SPI_DEBUG(fmt, ...) LSQ_DEBUG("%s: " fmt, iter->spi_name, __VA_ARGS__)
@@ -51,12 +52,13 @@ add_stream_to_spi (struct stream_prio_iter *iter, lsquic_stream_t *stream)
 void
 lsquic_spi_init (struct stream_prio_iter *iter, struct lsquic_stream *first,
         struct lsquic_stream *last, uintptr_t next_ptr_offset,
-        enum stream_flags onlist_mask, const lsquic_cid_t *cid, const char *name)
+        enum stream_flags onlist_mask, const struct lsquic_conn *conn,
+        const char *name)
 {
     struct lsquic_stream *stream;
     unsigned count;
 
-    iter->spi_cid           = cid;
+    iter->spi_conn          = conn;
     iter->spi_name          = name ? name : "UNSET";
     iter->spi_set[0]        = 0;
     iter->spi_set[1]        = 0;

@@ -18,6 +18,7 @@ typedef struct cert_hash_item_st
     struct lsquic_str*   domain; /*with port, such as "xyz.com:8088" as the key */
     struct lsquic_str*   crts;
     struct lsquic_str*   hashs;
+    struct lsquic_hash_elem hash_el;
     int         count;
 } cert_hash_item_t;
 

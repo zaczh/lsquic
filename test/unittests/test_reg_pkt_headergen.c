@@ -6,12 +6,14 @@
 #ifndef WIN32
 #include <sys/time.h>
 #endif
+#include <sys/queue.h>
 
 #include "lsquic_types.h"
 #include "lsquic.h"
 #include "lsquic_int_types.h"
 #include "lsquic_packet_common.h"
 #include "lsquic_packet_out.h"
+#include "lsquic_hash.h"
 #include "lsquic_conn.h"
 #include "lsquic_parse.h"
 
@@ -251,7 +253,7 @@ run_test (int i)
     cid.len = sizeof(test->cid);
     memcpy(cid.idbuf, &test->cid, sizeof(test->cid));
 
-    struct lsquic_conn lconn = { .cn_cid = cid, };
+    struct lsquic_conn lconn = LSCONN_INITIALIZER_CID(lconn, cid);
 
     unsigned char out[GQUIC_MAX_PUBHDR_SZ];
     int len = test->pf->pf_gen_reg_pkt_header(&lconn, &packet_out, out,

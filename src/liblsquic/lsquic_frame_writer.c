@@ -28,7 +28,8 @@
 #include "lsquic_ev_log.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_FRAME_WRITER
-#define LSQUIC_LOG_CONN_ID lsquic_conn_id(lsquic_stream_conn(fw->fw_stream))
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(\
+                                        lsquic_stream_conn(fw->fw_stream))
 #include "lsquic_logger.h"
 
 

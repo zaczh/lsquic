@@ -13,6 +13,7 @@
 #include "lsquic_sfcw.h"
 #include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_conn_public.h"
 #include "lsquic_mm.h"
@@ -22,7 +23,7 @@
 #include "lsquic_ev_log.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_SFCW
-#define LSQUIC_LOG_CONN_ID &fc->sf_conn_pub->lconn->cn_cid
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(fc->sf_conn_pub->lconn)
 #define LSQUIC_LOG_STREAM_ID fc->sf_stream_id
 #include "lsquic_logger.h"
 

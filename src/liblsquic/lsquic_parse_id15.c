@@ -27,6 +27,7 @@
 #include "lsquic_sfcw.h"
 #include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_mm.h"
 #include "lsquic_malo.h"
@@ -1234,6 +1235,49 @@ id15_calc_packno_bits (lsquic_packno_t packno,
 }
 
 
+static int
+id15_parse_max_data (const unsigned char *buf, size_t len, uint64_t *val)
+{
+    int s;
+
+    s = vint_read(buf + 1, buf + len, val);
+    if (s >= 0)
+        return 1 + s;
+    else
+        return s;
+}
+
+
+static int
+id15_parse_new_conn_id (const unsigned char *buf, size_t len, uint64_t *seqno,
+                                                            lsquic_cid_t *cid)
+{
+    const unsigned char *p = buf;
+    const unsigned char *const end = p + len;
+    unsigned char cid_len;
+    int s;
+
+    if (len < 3)
+        return -1;
+
+    ++p;    /* Frame type */
+    cid_len = *p++;
+
+    s = vint_read(p, end, seqno);
+    if (s < 0)
+        return s;
+    p += s;
+
+    if ((unsigned) (end - p) < cid_len + 16u /* Stateless reset token */)
+        return -1;
+    cid->len = cid_len;
+    memcpy(cid->idbuf, p, cid_len);
+    p += cid_len + 16;
+
+    return p - buf;
+}
+
+
 const struct parse_funcs lsquic_parse_funcs_id15 =
 {
     .pf_gen_reg_pkt_header            =  id15_gen_reg_pkt_header,
@@ -1272,4 +1316,6 @@ const struct parse_funcs lsquic_parse_funcs_id15 =
     .pf_gen_crypto_frame              =  id15_gen_crypto_frame,
     .pf_parse_crypto_frame            =  id15_parse_crypto_frame,
     .pf_calc_crypto_frame_header_sz   =  id15_calc_crypto_frame_header_sz,
+    .pf_parse_max_data                =  id15_parse_max_data,
+    .pf_parse_new_conn_id             =  id15_parse_new_conn_id,
 };

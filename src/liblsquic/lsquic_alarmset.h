@@ -9,6 +9,7 @@
 #include "lsquic_int_types.h"
 
 enum alarm_id;
+struct lsquic_conn;
 
 typedef void (*lsquic_alarm_cb_f)(enum alarm_id, void *cb_ctx,
                                   lsquic_time_t expiry, lsquic_time_t now);
@@ -49,13 +50,13 @@ enum alarm_id_bit {
 typedef struct lsquic_alarmset {
     enum alarm_id_bit           as_armed_set;
     lsquic_time_t               as_expiry[MAX_LSQUIC_ALARMS];
-    const lsquic_cid_t         *as_cid;    /* Used for logging */
+    const struct lsquic_conn   *as_conn;    /* Used for logging */
     struct lsquic_alarm         as_alarms[MAX_LSQUIC_ALARMS];
 } lsquic_alarmset_t;
 
 
 void
-lsquic_alarmset_init (lsquic_alarmset_t *, const lsquic_cid_t *);
+lsquic_alarmset_init (lsquic_alarmset_t *, const struct lsquic_conn *);
 
 void
 lsquic_alarmset_init_alarm (lsquic_alarmset_t *, enum alarm_id,

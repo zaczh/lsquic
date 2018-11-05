@@ -26,6 +26,7 @@
 #include "lsquic.h"
 #include "lsquic_parse_gquic_be.h"
 #include "lsquic_byteswap.h"
+#include "lsquic_hash.h"
 #include "lsquic_conn.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_PARSE

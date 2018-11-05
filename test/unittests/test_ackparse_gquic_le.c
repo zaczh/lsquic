@@ -12,6 +12,10 @@
 #include "lsquic_rechist.h"
 #include "lsquic_util.h"
 #include "lsquic.h"
+#include "lsquic_hash.h"
+#include "lsquic_conn.h"
+
+static struct lsquic_conn lconn = LSCONN_INITIALIZER_CIDLEN(lconn, 0);
 
 static const struct parse_funcs *const pf = select_pf_by_ver(LSQVER_035);
 
@@ -340,9 +344,8 @@ test_max_ack (void)
     const struct lsquic_packno_range *range;
     unsigned char buf[1500];
     struct ack_info acki;
-    lsquic_cid_t cid = { .len = 0, };
 
-    lsquic_rechist_init(&rechist, &cid, 0);
+    lsquic_rechist_init(&rechist, &lconn, 0);
     now = lsquic_time_now();
 
     for (i = 1; i <= 300; ++i)
@@ -394,9 +397,8 @@ test_ack_truncation (void)
     unsigned char buf[1500];
     struct ack_info acki;
     size_t bufsz;
-    lsquic_cid_t cid = { .len = 0, };
 
-    lsquic_rechist_init(&rechist, &cid, 0);
+    lsquic_rechist_init(&rechist, &lconn, 0);
     now = lsquic_time_now();
 
     for (i = 1; i <= 300; ++i)

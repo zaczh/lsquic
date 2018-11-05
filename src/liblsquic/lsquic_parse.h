@@ -196,6 +196,11 @@ struct parse_funcs
     (*pf_packno_info) (const struct lsquic_conn *,
         const struct lsquic_packet_out *, unsigned *packno_off,
         unsigned *packno_len);
+    int
+    (*pf_parse_max_data) (const unsigned char *, size_t, uint64_t *);
+    int
+    (*pf_parse_new_conn_id) (const unsigned char *, size_t, uint64_t *,
+                                                                lsquic_cid_t *);
 };
 
 extern const struct parse_funcs lsquic_parse_funcs_gquic_le;

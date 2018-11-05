@@ -154,8 +154,12 @@ lsquic_tp_encode (const struct transport_params *params,
                     params->tp_init_max_stream_data_bidi_remote, 32);
     if (params->tp_init_max_stream_data_uni                            /* 11 */
                                     != TP_DEF_INIT_MAX_STREAM_DATA_UNI)
+    {
         WRITE_PARAM_TO_P(TPI_INIT_MAX_STREAM_DATA_UNI,
                     params->tp_init_max_stream_data_uni, 32);
+        LSQ_DEBUG("init_max_stream_data_uni: %"PRIu32,
+            params->tp_init_max_stream_data_uni);
+    }
     if (params->tp_max_ack_delay != TP_DEF_MAX_ACK_DELAY)              /* 12 */
         WRITE_PARAM_TO_P(TPI_MAX_ACK_DELAY, params->tp_max_ack_delay, 8);
 

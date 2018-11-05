@@ -24,6 +24,7 @@
 #include "lsquic_sfcw.h"
 #include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_types.h"
 #include "lsquic_malo.h"
@@ -294,6 +295,7 @@ init_test_objs (struct test_objs *tobjs, unsigned initial_conn_window,
 {
     int s;
     memset(tobjs, 0, sizeof(*tobjs));
+    LSCONN_INITIALIZE(&tobjs->lconn);
     tobjs->lconn.cn_pf = pf ? pf : g_pf;
     tobjs->lconn.cn_version = tobjs->lconn.cn_pf == &lsquic_parse_funcs_id15 ?
         LSQVER_ID15 : LSQVER_043;
@@ -322,7 +324,7 @@ init_test_objs (struct test_objs *tobjs, unsigned initial_conn_window,
     tobjs->ctor_flags = stream_ctor_flags;
     if ((1 << tobjs->lconn.cn_version) & LSQUIC_IETF_VERSIONS)
     {
-        s = lsquic_qeh_init(&tobjs->qeh, &tobjs->lconn.cn_cid, 0, 0, 0, 0);
+        s = lsquic_qeh_init(&tobjs->qeh, &tobjs->lconn, 0, 0, 0, 0);
         assert(0 == s);
         tobjs->conn_pub.u.ietf.qeh = &tobjs->qeh;
     }
@@ -2895,7 +2897,7 @@ test_hq_framing (int sched_immed, int dispatch_once, unsigned wsize)
                 src += sz;
             }
         }
-        assert(buf_in_sz == dst - buf_out);
+        assert(buf_in_sz == (uintptr_t) dst - (uintptr_t) buf_out);
         assert(0 == memcmp(buf_in, buf_out, buf_in_sz));
     }
 

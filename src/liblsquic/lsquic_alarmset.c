@@ -11,14 +11,14 @@
 #include "lsquic_alarmset.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_ALARMSET
-#define LSQUIC_LOG_CONN_ID alset->as_cid
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(alset->as_conn)
 #include "lsquic_logger.h"
 
 
 void
-lsquic_alarmset_init (lsquic_alarmset_t *alset, const lsquic_cid_t *cid)
+lsquic_alarmset_init (lsquic_alarmset_t *alset, const struct lsquic_conn *conn)
 {
-    alset->as_cid       = cid;
+    alset->as_conn      = conn;
     alset->as_armed_set = 0;
 }
 

@@ -153,6 +153,7 @@ enum stream_flags {
 struct lsquic_stream
 {
     lsquic_stream_id_t              id;
+    struct lsquic_hash_elem         sm_hash_el;
     enum stream_flags               stream_flags;
     unsigned                        n_unacked;
 

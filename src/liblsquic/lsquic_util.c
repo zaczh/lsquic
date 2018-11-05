@@ -97,7 +97,7 @@ lsquic_is_zero (const void *pbuf, size_t bufsz)
 }
 
 
-/* XXX this function uses static buffer.  Replace it with hexdump() if possible */
+/* XXX this function uses static buffer.  Replace it with lsquic_hexdump() if possible */
 char *get_bin_str(const void *s, size_t len, size_t max_display_len)
 {
     const unsigned char *p, *pEnd;
@@ -150,7 +150,7 @@ lsquic_hexstr (const unsigned char *buf, size_t bufsz, char *out, size_t outsz)
 
 
 size_t
-hexdump (const void *src_void, size_t src_sz, char *out, size_t out_sz)
+lsquic_hexdump (const void *src_void, size_t src_sz, char *out, size_t out_sz)
 {
 /* Ruler:
  *

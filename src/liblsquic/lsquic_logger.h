@@ -65,7 +65,6 @@ enum lsquic_logger_module {
     LSQLM_HEADERS,
     LSQLM_FRAME_WRITER,
     LSQLM_FRAME_READER,
-    LSQLM_CONN_HASH,
     LSQLM_ENG_HIST,
     LSQLM_SPI,
     LSQLM_DI,
@@ -245,6 +244,9 @@ lsquic_logger_lopt (const char *optarg);
 
 void
 lsquic_cid2str (const struct lsquic_cid *, char *out);
+
+const struct lsquic_cid *
+lsquic_conn_log_cid (const struct lsquic_conn *);
 
 #ifdef __cplusplus
 }

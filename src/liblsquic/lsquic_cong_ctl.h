@@ -7,10 +7,12 @@
 #define LSQUIC_CONG_CTL_H
 
 
+struct lsquic_conn;
+
 struct cong_ctl_if
 {
     void
-    (*cci_init) (void *cong_ctl, const lsquic_cid_t *);
+    (*cci_init) (void *cong_ctl, const struct lsquic_conn *);
 
     void
     (*cci_ack) (void *cong_ctl, lsquic_time_t now,

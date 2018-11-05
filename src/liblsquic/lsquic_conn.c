@@ -2,9 +2,11 @@
 #include <assert.h>
 #include <inttypes.h>
 #include <string.h>
+#include <sys/queue.h>
 
 #include "lsquic.h"
 #include "lsquic_int_types.h"
+#include "lsquic_hash.h"
 #include "lsquic_conn.h"
 #include "lsquic_packet_common.h"
 #include "lsquic_packet_gquic.h"
@@ -20,7 +22,8 @@
 const lsquic_cid_t *
 lsquic_conn_id (const lsquic_conn_t *lconn)
 {
-    return &lconn->cn_cid;
+    /* TODO */
+    return lsquic_conn_log_cid(lconn);
 }
 
 
@@ -197,4 +200,15 @@ enum LSQUIC_CONN_STATUS
 lsquic_conn_status (struct lsquic_conn *lconn, char *errbuf, size_t bufsz)
 {
     return lconn->cn_if->ci_status(lconn, errbuf, bufsz);
+}
+
+
+const lsquic_cid_t *
+lsquic_conn_log_cid (const struct lsquic_conn *lconn)
+{
+    if ((lconn->cn_flags & (LSCONN_SERVER|LSCONN_IETF))
+                                    == (LSCONN_SERVER|LSCONN_IETF))
+        return &lconn->cn_dcid;
+    else
+        return &lconn->cn_cces[0].cce_cid;
 }

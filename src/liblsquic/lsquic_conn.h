@@ -135,6 +135,15 @@ struct conn_iface
 
 };
 
+#define LSCONN_CCE_BITS 3
+#define LSCONN_MAX_CCES (1 << LSCONN_CCE_BITS)
+
+struct conn_cid_elem
+{
+    struct lsquic_hash_elem     cce_hash_el;
+    lsquic_cid_t                cce_cid;
+};
+
 struct lsquic_conn
 {
     void                        *cn_peer_ctx;
@@ -145,13 +154,12 @@ struct lsquic_conn
         const struct enc_session_funcs_gquic   *g;
         const struct enc_session_funcs_iquic   *i;
     }                            cn_esf;
-    lsquic_cid_t                 cn_cid;
-#define cn_scid cn_cid
+#define cn_cid cn_cces[0].cce_cid
+#define cn_scid cn_cces[0].cce_cid
     lsquic_cid_t                 cn_dcid;
     STAILQ_ENTRY(lsquic_conn)    cn_next_closed_conn;
     TAILQ_ENTRY(lsquic_conn)     cn_next_ticked;
-    TAILQ_ENTRY(lsquic_conn)     cn_next_out,
-                                 cn_next_hash;
+    TAILQ_ENTRY(lsquic_conn)     cn_next_out;
     const struct conn_iface     *cn_if;
     const struct parse_funcs    *cn_pf;
     struct attq_elem            *cn_attq_elem;
@@ -159,10 +167,26 @@ struct lsquic_conn
     lsquic_time_t                cn_last_ticked;
     enum lsquic_conn_flags       cn_flags;
     enum lsquic_version          cn_version;
-    unsigned                     cn_hash;
+    struct conn_cid_elem        *cn_cces;   /* At least one is available */
     unsigned short               cn_pack_size;
+    unsigned char                cn_cces_mask;  /* Those that are set */
+    unsigned char                cn_n_cces; /* Number of CCEs in cn_cces */
     unsigned char                cn_peer_addr[sizeof(struct sockaddr_in6)],
                                  cn_local_addr[sizeof(struct sockaddr_in6)];
+#if LSQUIC_TEST
+    struct conn_cid_elem         cn_cces_buf[8];
+#define LSCONN_INITIALIZER_CID(lsconn_, cid_) { \
+                .cn_cces = (lsconn_).cn_cces_buf, \
+                .cn_cces_buf[0].cce_cid = (cid_), \
+                .cn_n_cces = 8, .cn_cces_mask = 1, }
+#define LSCONN_INITIALIZER_CIDLEN(lsconn_, len_) { \
+                .cn_cces = (lsconn_).cn_cces_buf, \
+                .cn_cces_buf[0].cce_cid = { .len = len_ }, \
+                .cn_n_cces = 8, .cn_cces_mask = 1, }
+#define LSCONN_INITIALIZE(lsconn_) do { \
+            (lsconn_)->cn_cces = (lsconn_)->cn_cces_buf; \
+            (lsconn_)->cn_n_cces = 8; (lsconn_)->cn_cces_mask = 1; } while (0)
+#endif
 };
 
 void

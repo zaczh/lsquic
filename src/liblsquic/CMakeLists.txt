@@ -32,7 +32,6 @@ SET(lsquic_STAT_SRCS
     lsquic_frame_reader.c
     lsquic_frame_writer.c
     lsquic_crt_compress.c
-    lsquic_conn_hash.c
     lsquic_eng_hist.c
     lsquic_spi.c
     lsquic_di_nocopy.c

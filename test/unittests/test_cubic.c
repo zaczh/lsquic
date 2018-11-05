@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/queue.h>
 #ifndef WIN32
 #include <unistd.h>
 #else
@@ -14,6 +15,8 @@
 #include "lsquic_cong_ctl.h"
 #include "lsquic_cubic.h"
 #include "lsquic_logger.h"
+#include "lsquic_hash.h"
+#include "lsquic_conn.h"
 
 static const struct cong_ctl_if *const cci = &lsquic_cong_cubic_if;
 
@@ -23,10 +26,10 @@ test_post_quiescence_explosion (void)
     struct lsquic_cubic cubic;
     lsquic_time_t const rtt = 10000;
     lsquic_time_t t = 12345600;
-    lsquic_cid_t cid = { .len = 8, .idbuf = { __LINE__ }};
+    struct lsquic_conn lconn = LSCONN_INITIALIZER_CIDLEN(lconn, 8);
     int i;
 
-    cci->cci_init(&cubic, &cid);
+    cci->cci_init(&cubic, &lconn);
     cubic.cu_ssthresh = cubic.cu_cwnd = 32 * 1370;
 
     for (i = 0; i < 10; ++i)
@@ -50,10 +53,10 @@ test_post_quiescence_explosion2 (void)
     struct lsquic_cubic cubic;
     lsquic_time_t const rtt = 10000;
     lsquic_time_t t = 12345600;
-    lsquic_cid_t cid = { .len = 8, .idbuf = { __LINE__ }};
+    struct lsquic_conn lconn = LSCONN_INITIALIZER_CIDLEN(lconn, 8);
     int i;
 
-    cci->cci_init(&cubic, &cid);
+    cci->cci_init(&cubic, &lconn);
     cubic.cu_ssthresh = cubic.cu_cwnd = 32 * 1370;
 
     for (i = 0; i < 10; ++i)

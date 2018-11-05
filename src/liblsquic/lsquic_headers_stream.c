@@ -30,7 +30,8 @@
 #define MAX_HEADER_TABLE_SIZE (512 * 1024)
 
 #define LSQUIC_LOGGER_MODULE LSQLM_HEADERS
-#define LSQUIC_LOG_CONN_ID lsquic_conn_id(lsquic_stream_conn(hs->hs_stream))
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(\
+                                        lsquic_stream_conn(hs->hs_stream))
 #include "lsquic_logger.h"
 
 static const struct frame_reader_callbacks *frame_callbacks_ptr;

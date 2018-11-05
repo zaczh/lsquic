@@ -16,6 +16,7 @@
 #include "lsquic_conn_flow.h"
 #include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_conn.h"
 #include "lsquic_conn_public.h"

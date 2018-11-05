@@ -19,6 +19,7 @@
 #include "lsquic_conn_flow.h"
 #include "lsquic_sfcw.h"
 #include "lsquic_rtt.h"
+#include "lsquic_hash.h"
 #include "lsquic_conn.h"
 #include "lsquic_hq.h"
 #include "lsquic_varint.h"

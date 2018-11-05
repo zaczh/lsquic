@@ -24,7 +24,8 @@
 #include "lsquic_ev_log.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_FRAME_READER
-#define LSQUIC_LOG_CONN_ID lsquic_conn_id(lsquic_stream_conn(fr->fr_stream))
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(lsquic_stream_conn(\
+                                                            fr->fr_stream))
 #include "lsquic_logger.h"
 
 
@@ -193,7 +194,7 @@ lsquic_frame_reader_new (enum frame_reader_flags flags,
     if (hsi_if == lsquic_http1x_if)
     {
         fr->fr_h1x_ctor_ctx = (struct http1x_ctor_ctx) {
-            .cid            = LSQUIC_LOG_CONN_ID,
+            .conn           = lsquic_stream_conn(stream),
             .max_headers_sz = fr->fr_max_headers_sz,
             .is_server      = fr->fr_flags & FRF_SERVER,
         };

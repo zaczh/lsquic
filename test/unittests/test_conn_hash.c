@@ -12,6 +12,7 @@
 #include "lsquic.h"
 #include "lsquic_int_types.h"
 #include "lsquic_types.h"
+#include "lsquic_hash.h"
 #include "lsquic_conn.h"
 #include "lsquic_conn_hash.h"
 #include "lsquic_mm.h"

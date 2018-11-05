@@ -6,6 +6,8 @@ include_directories( ../../src/liblsquic/ls-hpack/include )
 
 enable_testing()
 
+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DLSQUIC_TEST=1")
+
 IF (NOT MSVC)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-value")
 IF (CMAKE_C_COMPILER MATCHES gcc)
@@ -52,10 +54,6 @@ add_test(spi test_spi)
 add_executable(test_malo test_malo.c)
 target_link_libraries(test_malo lsquic m ${LIBS})
 add_test(malo test_malo)
-
-add_executable(test_conn_hash test_conn_hash.c)
-target_link_libraries(test_conn_hash lsquic m ${LIBS})
-add_test(conn_hash test_conn_hash)
 
 add_executable(test_lsquic_hash test_lsquic_hash.c)
 target_link_libraries(test_lsquic_hash lsquic m ${LIBS})
@@ -288,10 +286,6 @@ add_test(spi test_spi)
 add_executable(test_malo test_malo.c ../../wincompat/getopt.c ../../wincompat/getopt1.c)
 target_link_libraries(test_malo lsquic ${MIN_LIBS_LIST})
 add_test(malo test_malo)
-
-add_executable(test_conn_hash test_conn_hash.c)
-target_link_libraries(test_conn_hash lsquic ${MIN_LIBS_LIST})
-add_test(conn_hash test_conn_hash)
 
 add_executable(test_lsquic_hash test_lsquic_hash.c)
 target_link_libraries(test_lsquic_hash lsquic ${MIN_LIBS_LIST})

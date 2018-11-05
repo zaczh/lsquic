@@ -13,6 +13,7 @@
 #include "lshpack.h"
 #include "lsquic_mm.h"
 #include "lsquic_int_types.h"
+#include "lsquic_hash.h"
 #include "lsquic_conn.h"
 #include "lsquic_frame_common.h"
 #include "lsquic_frame_writer.h"
@@ -352,9 +353,7 @@ test_settings_normal (void)
 }
 
 
-static struct lsquic_conn my_conn = {
-    .cn_cid = { .len = 8, },
-};
+static struct lsquic_conn my_conn = LSCONN_INITIALIZER_CIDLEN(my_conn, 8);
 
 
 #if !defined(NDEBUG) && __GNUC__

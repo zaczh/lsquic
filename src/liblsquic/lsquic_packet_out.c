@@ -22,6 +22,7 @@
 #include "lsquic_sfcw.h"
 #include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_logger.h"
 #include "lsquic_ev_log.h"
@@ -808,7 +809,8 @@ lsquic_packet_out_turn_on_fin (struct lsquic_packet_out *packet_out,
             if (last_offset == stream->tosend_off)
             {
                 pf->pf_turn_on_fin(packet_out->po_data + srec->sr_off);
-                EV_LOG_UPDATED_STREAM_FRAME(lsquic_stream_cid(stream),
+                EV_LOG_UPDATED_STREAM_FRAME(
+                    lsquic_conn_log_cid(lsquic_stream_conn(stream)),
                     pf, packet_out->po_data + srec->sr_off, srec->sr_len);
                 return 0;
             }

@@ -59,6 +59,7 @@
 #include "lsquic_sfcw.h"
 #include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_mm.h"
 #include "lsquic_malo.h"
@@ -68,7 +69,7 @@
 
 
 #define LSQUIC_LOGGER_MODULE LSQLM_DI
-#define LSQUIC_LOG_CONN_ID &ncdi->ncdi_conn_pub->lconn->cn_cid
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(ncdi->ncdi_conn_pub->lconn)
 #define LSQUIC_LOG_STREAM_ID ncdi->ncdi_stream_id
 #include "lsquic_logger.h"
 

@@ -15,6 +15,7 @@
 #include "lsquic.h"
 #include "lsquic_int_types.h"
 #include "lsquic_malo.h"
+#include "lsquic_hash.h"
 #include "lsquic_conn.h"
 #include "lsquic_rtt.h"
 #include "lsquic_packet_common.h"
