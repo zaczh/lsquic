@@ -32,14 +32,8 @@
 #define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(qdh->qdh_conn)
 #include "lsquic_logger.h"
 
-static ssize_t
-qdh_stream_read (void *ctx, const unsigned char **buf, size_t sz);
-
 static void
-qdh_hblock_done (void *ctx, struct lsqpack_header_set *);
-
-static void
-qdh_stream_wantread (void *ctx, int wantread);
+qdh_hblock_unblocked (void *);
 
 
 static void
@@ -108,7 +102,7 @@ lsquic_qdh_init (struct qpack_dec_hdl *qdh, const struct lsquic_conn *conn,
     lsquic_frab_list_init(&qdh->qdh_fral, 0x400, NULL, NULL, NULL);
     lsqpack_dec_init(&qdh->qdh_decoder, dyn_table_size,
                         max_risked_streams, qdh_write_decoder, qdh,
-                        qdh_stream_read, qdh_stream_wantread, qdh_hblock_done);
+                        qdh_hblock_unblocked);
     qdh->qdh_flags |= QDH_INITIALIZED;
     qdh->qdh_enpub = enpub;
     if (qdh->qdh_enpub->enp_hsi_if == lsquic_http1x_if)
@@ -292,47 +286,15 @@ static const struct lsquic_stream_if qdh_enc_sm_in_if =
 const struct lsquic_stream_if *const lsquic_qdh_enc_sm_in_if =
                                                     &qdh_enc_sm_in_if;
 
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
-
-static ssize_t
-qdh_stream_read (void *stream_p, const unsigned char **buf, size_t sz)
-{
-    struct qpack_dec_hdl *const qdh = lsquic_stream_get_qdh(stream_p);
-    struct qpack_dec_ctx *const dec_ctx = &qdh->qdh_dec_ctx;
-
-    LSQ_DEBUG("%s: asked for %zu bytes, return %zu", __func__, sz,
-                                    MIN(sz, dec_ctx->size - dec_ctx->off));
-    if (sz > dec_ctx->size - dec_ctx->off)
-        sz = dec_ctx->size - dec_ctx->off;
-    *buf = dec_ctx->buf + dec_ctx->off;
-    dec_ctx->off += sz;
-    return sz;
-}
-
 
 static void
-qdh_hblock_done (void *stream_p, struct lsqpack_header_set *hset)
+qdh_hblock_unblocked (void *stream_p)
 {
     struct lsquic_stream *const stream = stream_p;
     struct qpack_dec_hdl *const qdh = lsquic_stream_get_qdh(stream);
-    struct qpack_dec_ctx *const dec_ctx = &qdh->qdh_dec_ctx;
 
-    dec_ctx->done = 1;
-    dec_ctx->hset = hset;
-    LSQ_DEBUG("done for stream %"PRIu64"; have hset: %d", stream->id, !!hset);
-}
-
-
-static void
-qdh_stream_wantread (void *stream_p, int wantread)
-{
-    struct lsquic_stream *const stream = stream_p;
-    struct qpack_dec_hdl *const qdh = lsquic_stream_get_qdh(stream);
-    struct qpack_dec_ctx *const dec_ctx = &qdh->qdh_dec_ctx;
-
-    dec_ctx->wantread = wantread;
-    LSQ_DEBUG("wantread for stream %"PRIu64": %d", stream->id, wantread);
-    lsquic_stream_wantread(stream, wantread);
+    LSQ_DEBUG("header block for stream %"PRIu64" unblocked", stream->id);
+    (void) lsquic_stream_wantread(stream, 1);
 }
 
 
@@ -375,6 +337,8 @@ qdh_supply_hset_to_stream (struct qpack_dec_hdl *qdh,
         goto err;
 
     uh = calloc(1, sizeof(*uh));
+    if (!uh)
+        goto err;
     uh->uh_stream_id = stream->id;
     uh->uh_oth_stream_id = 0;
     uh->uh_weight = 0;
@@ -400,89 +364,68 @@ qdh_supply_hset_to_stream (struct qpack_dec_hdl *qdh,
 }
 
 
-enum header_in_status
-qdh_header_in_results (struct qpack_dec_hdl *qdh, struct lsquic_stream *stream,
-                                                    const unsigned char **buf)
+static enum lsqpack_read_header_status
+qdh_header_read_results (struct qpack_dec_hdl *qdh,
+        struct lsquic_stream *stream, enum lsqpack_read_header_status rhs,
+        struct lsqpack_header_set *qset)
 {
-    *buf = qdh->qdh_dec_ctx.buf + qdh->qdh_dec_ctx.off;
-    if (qdh->qdh_dec_ctx.done)
+    if (rhs == LQRHS_DONE)
     {
-        if (qdh->qdh_dec_ctx.hset
-                && 0 == qdh_supply_hset_to_stream(qdh, stream,
-                                                        qdh->qdh_dec_ctx.hset))
-            return HIS_DONE;
+        if (qset)
+        {
+            if (0 != qdh_supply_hset_to_stream(qdh, stream, qset))
+                return LQRHS_ERROR;
+        }
         else
-            return HIS_ERROR;
+        {
+            assert(0);  /* XXX TODO What do we do here? */
+            return LQRHS_ERROR;
+        }
     }
-    else if (qdh->qdh_dec_ctx.wantread > 0)
-        return HIS_NEED;
-    else if (qdh->qdh_dec_ctx.wantread == 0)
-        return HIS_BLOCKED;
-    else
-    {
-        assert(0);
-        return HIS_ERROR;
-    }
+    return rhs;
 }
 
 
-enum header_in_status
+enum lsqpack_read_header_status
 lsquic_qdh_header_in_begin (struct qpack_dec_hdl *qdh,
                         struct lsquic_stream *stream, uint64_t header_size,
                         const unsigned char **buf, size_t bufsz)
 {
-    if (!qdh->qdh_flags & QDH_INITIALIZED)
+    enum lsqpack_read_header_status rhs;
+    struct lsqpack_header_set *qset;
+
+    if (qdh->qdh_flags & QDH_INITIALIZED)
     {
-        LSQ_WARN("not initialized: cannot process header block");
-        return HIS_ERROR;
+        rhs = lsqpack_dec_header_in(&qdh->qdh_decoder, stream, stream->id,
+                                            header_size, buf, bufsz, &qset);
+        return qdh_header_read_results(qdh, stream, rhs, qset);
     }
-
-    qdh->qdh_dec_ctx = (struct qpack_dec_ctx) {
-        .buf        = *buf,
-        .size       = bufsz,
-        .off        = 0,
-        .wantread   = -1,
-        .done       = 0,
-        .hset       = NULL,
-    };
-
-    if (0 == lsqpack_dec_header_in(&qdh->qdh_decoder, stream, stream->id,
-                                                                header_size))
-        return qdh_header_in_results(qdh, stream, buf);
     else
     {
-        LSQ_DEBUG("header_in failed");
-        return HIS_ERROR;
+        LSQ_WARN("not initialized: cannot process header block");
+        return LQRHS_ERROR;
     }
 
 }
 
 
-enum header_in_status
+enum lsqpack_read_header_status
 lsquic_qdh_header_in_continue (struct qpack_dec_hdl *qdh,
         struct lsquic_stream *stream, const unsigned char **buf, size_t bufsz)
 {
-    if (!qdh->qdh_flags & QDH_INITIALIZED)
+    enum lsqpack_read_header_status rhs;
+    struct lsqpack_header_set *qset;
+
+    if (qdh->qdh_flags & QDH_INITIALIZED)
     {
-        LSQ_WARN("not initialized: cannot process header block");
-        return HIS_ERROR;
+        rhs = lsqpack_dec_header_read(&qdh->qdh_decoder, stream,
+                                                            buf, bufsz, &qset);
+        return qdh_header_read_results(qdh, stream, rhs, qset);
     }
-
-    qdh->qdh_dec_ctx = (struct qpack_dec_ctx) {
-        .buf        = *buf,
-        .size       = bufsz,
-        .off        = 0,
-        .wantread   = -1,
-        .done       = 0,
-        .hset       = NULL,
-    };
-
-    if (0 == lsqpack_dec_header_read(&qdh->qdh_decoder, stream))
-        return qdh_header_in_results(qdh, stream, buf);
     else
     {
-        LSQ_DEBUG("header_read failed");
-        return HIS_ERROR;
+        LSQ_WARN("not initialized: cannot process header block");
+        return LQRHS_ERROR;
     }
 }
 

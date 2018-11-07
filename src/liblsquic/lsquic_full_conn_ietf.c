@@ -1081,6 +1081,7 @@ ietf_full_conn_ci_handshake_ok (struct lsquic_conn *lconn)
 
     if (conn->ifc_flags & IFC_HTTP)
     {
+        lsquic_qeh_init(&conn->ifc_qeh, &conn->ifc_conn);
         if (0 == avail_streams_count(conn, conn->ifc_flags & IFC_SERVER,
                                                                     SD_UNI))
         {
@@ -2854,7 +2855,7 @@ on_settings_frame (void *ctx)
                                 conn->ifc_peer_hq_settings.header_table_size);
     max_risked_streams = MIN(conn->ifc_settings->es_qpack_enc_max_blocked,
                             conn->ifc_peer_hq_settings.qpack_blocked_streams);
-    if (0 != lsquic_qeh_init(&conn->ifc_qeh, &conn->ifc_conn,
+    if (0 != lsquic_qeh_settings(&conn->ifc_qeh,
             conn->ifc_peer_hq_settings.header_table_size,
             dyn_table_size, max_risked_streams, conn->ifc_flags & IFC_SERVER))
         ABORT_WARN("could not initialize QPACK encoder handler");

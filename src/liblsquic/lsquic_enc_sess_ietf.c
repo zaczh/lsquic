@@ -603,7 +603,7 @@ get_crypto_params (const struct enc_sess_iquic *enc_sess,
     switch (id)
     {
     case 0x03000000 | 0x1301:       /* TLS_AES_128_GCM_SHA256 */
-        params->md       = EVP_sha384();
+        params->md       = EVP_sha256();
         params->aead     = EVP_aead_aes_128_gcm();
         params->pn       = EVP_aes_128_ctr();
         params->enc_pn_f = encrypt_pn_aes;

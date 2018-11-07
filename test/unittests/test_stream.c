@@ -324,7 +324,8 @@ init_test_objs (struct test_objs *tobjs, unsigned initial_conn_window,
     tobjs->ctor_flags = stream_ctor_flags;
     if ((1 << tobjs->lconn.cn_version) & LSQUIC_IETF_VERSIONS)
     {
-        s = lsquic_qeh_init(&tobjs->qeh, &tobjs->lconn, 0, 0, 0, 0);
+        lsquic_qeh_init(&tobjs->qeh, &tobjs->lconn);
+        s = lsquic_qeh_settings(&tobjs->qeh, 0, 0, 0, 0);
         assert(0 == s);
         tobjs->conn_pub.u.ietf.qeh = &tobjs->qeh;
     }

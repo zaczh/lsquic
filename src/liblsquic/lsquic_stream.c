@@ -3265,7 +3265,7 @@ hq_read (void *ctx, const unsigned char *buf, size_t sz, int fin)
     struct hq_filter *const filter = &stream->sm_hq_filter;
     const unsigned char *p = buf, *prev;
     const unsigned char *const end = buf + sz;
-    enum header_in_status his;
+    enum lsqpack_read_header_status rhs;
 
     while (p < end)
     {
@@ -3320,31 +3320,31 @@ hq_read (void *ctx, const unsigned char *buf, size_t sz, int fin)
                 if (filter->hqfi_flags & HQFI_FLAG_BEGIN)
                 {
                     filter->hqfi_flags &= ~HQFI_FLAG_BEGIN;
-                    his = lsquic_qdh_header_in_begin(
+                    rhs = lsquic_qdh_header_in_begin(
                                 stream->conn_pub->u.ietf.qdh,
                                 stream, filter->hqfi_left, &p, sz);
                 }
                 else
-                    his = lsquic_qdh_header_in_continue(
+                    rhs = lsquic_qdh_header_in_continue(
                                 stream->conn_pub->u.ietf.qdh, stream, &p, sz);
-                assert(p > prev || HIS_ERROR == his);
+                assert(p > prev || LQRHS_ERROR == rhs);
                 filter->hqfi_left -= p - prev;
                 if (filter->hqfi_left == 0)
                     filter->hqfi_state = HQFI_STATE_READING_SIZE_BEGIN;
-                switch (his)
+                switch (rhs)
                 {
-                case HIS_DONE:
+                case LQRHS_DONE:
                     assert(filter->hqfi_left == 0);
                     break;
-                case HIS_NEED:
+                case LQRHS_NEED:
                     stream->stream_flags |= STREAM_QPACK_DEC;
                     break;
-                case HIS_BLOCKED:
+                case LQRHS_BLOCKED:
                     stream->stream_flags |= STREAM_QPACK_DEC;
                     filter->hqfi_flags |= HQFI_FLAG_BLOCKED;
                     goto end;
                 default:
-                    assert(HIS_ERROR == his);
+                    assert(LQRHS_ERROR == rhs);
                     filter->hqfi_flags |= HQFI_FLAG_ERROR;
                     LSQ_INFO("error processing header block");
                     abort_connection(stream);   /* XXX Overkill? */

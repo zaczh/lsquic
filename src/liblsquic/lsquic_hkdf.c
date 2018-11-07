@@ -30,7 +30,10 @@ lsquic_qhkdf_expand (const EVP_MD *md, const unsigned char *secret,
     memcpy(info + 8, label, label_len);
     info[8 + label_len] = 0;
 #ifndef NDEBUG
-    s = HKDF_expand(out, out_len, md, secret, secret_len, info, sizeof(info));
-    assert(s);
+    s =
+#else
+    (void)
 #endif
+    HKDF_expand(out, out_len, md, secret, secret_len, info, sizeof(info));
+    assert(s);
 }

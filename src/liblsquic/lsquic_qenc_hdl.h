@@ -19,6 +19,7 @@ struct qpack_enc_hdl
     const struct lsquic_conn *qeh_conn;
     enum {
         QEH_INITIALIZED     = 1 << 0,
+        QEH_HAVE_SETTINGS   = 1 << 1,
     }                        qeh_flags;
     unsigned                 qeh_max_prefix_size;
     struct lsqpack_enc       qeh_encoder;
@@ -27,10 +28,12 @@ struct qpack_enc_hdl
     struct lsquic_stream    *qeh_dec_sm_in;
 };
 
+void
+lsquic_qeh_init (struct qpack_enc_hdl *, const struct lsquic_conn *);
+
 int
-lsquic_qeh_init (struct qpack_enc_hdl *, const struct lsquic_conn *,
-                    unsigned max_table_size, unsigned dyn_table_size,
-                    unsigned max_risked_streams, int server);
+lsquic_qeh_settings (struct qpack_enc_hdl *, unsigned max_table_size,
+            unsigned dyn_table_size, unsigned max_risked_streams, int server);
 
 void
 lsquic_qeh_cleanup (struct qpack_enc_hdl *);

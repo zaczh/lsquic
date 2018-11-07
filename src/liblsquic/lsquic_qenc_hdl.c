@@ -41,22 +41,13 @@ qeh_begin_out (struct qpack_enc_hdl *qeh)
 }
 
 
-int
-lsquic_qeh_init (struct qpack_enc_hdl *qeh, const struct lsquic_conn *conn,
-                        unsigned max_table_size, unsigned dyn_table_size,
-                        unsigned max_risked_streams, int server)
+void
+lsquic_qeh_init (struct qpack_enc_hdl *qeh, const struct lsquic_conn *conn)
 {
-    enum lsqpack_enc_opts enc_opts = server ? LSQPACK_ENC_OPT_SERVER : 0;
-
+    assert(!(qeh->qeh_flags & QEH_INITIALIZED));
     qeh->qeh_conn = conn;
     lsquic_frab_list_init(&qeh->qeh_fral, 0x400, NULL, NULL, NULL);
-    if (0 != lsqpack_enc_init(&qeh->qeh_encoder, max_table_size, dyn_table_size,
-                            max_risked_streams, enc_opts | LSQPACK_ENC_OPT_DUP))
-    {
-        lsquic_frab_list_cleanup(&qeh->qeh_fral);
-        LSQ_INFO("could not initialize QPACK encoder");
-        return -1;
-    }
+    lsqpack_enc_preinit(&qeh->qeh_encoder);
     qeh->qeh_flags |= QEH_INITIALIZED;
     qeh->qeh_max_prefix_size =
                         lsqpack_enc_header_data_prefix_size(&qeh->qeh_encoder);
@@ -65,6 +56,36 @@ lsquic_qeh_init (struct qpack_enc_hdl *qeh, const struct lsquic_conn *conn,
     if (qeh->qeh_dec_sm_in)
         lsquic_stream_wantread(qeh->qeh_dec_sm_in, 1);
     LSQ_DEBUG("initialized");
+}
+
+
+int
+lsquic_qeh_settings (struct qpack_enc_hdl *qeh, unsigned max_table_size,
+             unsigned dyn_table_size, unsigned max_risked_streams, int server)
+{
+    enum lsqpack_enc_opts enc_opts;
+
+    assert(qeh->qeh_flags & QEH_INITIALIZED);
+
+    if (qeh->qeh_flags & QEH_HAVE_SETTINGS)
+    {
+        LSQ_WARN("settings already set");
+        return -1;
+    }
+
+    enc_opts = LSQPACK_ENC_OPT_DUP | LSQPACK_ENC_OPT_STAGE_2
+             | server ? LSQPACK_ENC_OPT_SERVER : 0;
+    if (0 != lsqpack_enc_init(&qeh->qeh_encoder, max_table_size, dyn_table_size,
+                                                max_risked_streams, enc_opts))
+    {
+        LSQ_INFO("could not initialize QPACK encoder");
+        return -1;
+    }
+    qeh->qeh_flags |= QEH_HAVE_SETTINGS;
+    qeh->qeh_max_prefix_size =
+                        lsqpack_enc_header_data_prefix_size(&qeh->qeh_encoder);
+    LSQ_DEBUG("have settings: max table size=%u; dyn table size=%u; max risked "
+        "streams=%u", max_table_size, dyn_table_size, max_risked_streams);
     return 0;
 }
 
@@ -77,7 +98,7 @@ lsquic_qeh_cleanup (struct qpack_enc_hdl *qeh)
         LSQ_DEBUG("cleanup");
         lsqpack_enc_cleanup(&qeh->qeh_encoder);
         lsquic_frab_list_cleanup(&qeh->qeh_fral);
-        qeh->qeh_flags &= ~QEH_INITIALIZED;
+        memset(qeh, 0, sizeof(*qeh));
     }
 }
 
@@ -397,7 +418,7 @@ lsquic_qeh_write_avail (struct qpack_enc_hdl *qeh)
 size_t
 lsquic_qeh_max_prefix_size (const struct qpack_enc_hdl *qeh)
 {
-    if (qeh->qeh_flags & QEH_INITIALIZED)
+    if (qeh->qeh_flags & QEH_HAVE_SETTINGS)
         return qeh->qeh_max_prefix_size;
     else
         return LSQPACK_UINT64_ENC_SZ * 2;

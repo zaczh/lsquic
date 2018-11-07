@@ -15,15 +15,6 @@ struct lsquic_stream;
 struct lsquic_stream_if;
 struct lsquic_engine_public;
 
-struct qpack_dec_ctx
-{
-    const unsigned char *buf;
-    size_t               off, size;
-    struct lsqpack_header_set
-                        *hset;
-    int                  wantread, done;
-};
-
 
 struct qpack_dec_hdl
 {
@@ -37,9 +28,6 @@ struct qpack_dec_hdl
     struct lsquic_stream    *qdh_dec_sm_out;
     const struct lsquic_engine_public
                             *qdh_enpub;
-    struct qpack_dec_ctx     qdh_dec_ctx;   /* Transient context for use with
-                                             * lsqpack callbacks.
-                                             */
     struct http1x_ctor_ctx   qdh_h1x_ctor_ctx;
     void                    *qdh_hsi_ctx;
 };
@@ -63,11 +51,11 @@ enum header_in_status
 };
 
 
-enum header_in_status
+enum lsqpack_read_header_status
 lsquic_qdh_header_in_begin (struct qpack_dec_hdl *, struct lsquic_stream *,
                             uint64_t size, const unsigned char **, size_t);
 
-enum header_in_status
+enum lsqpack_read_header_status
 lsquic_qdh_header_in_continue (struct qpack_dec_hdl *, struct lsquic_stream *,
                                 const unsigned char **, size_t);
 
