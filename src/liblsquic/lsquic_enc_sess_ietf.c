@@ -547,7 +547,10 @@ init_client (struct enc_sess_iquic *const enc_sess)
         goto err;
     }
     if (0 != SSL_set_alpn_protos(enc_sess->esi_ssl,
-                                            (unsigned char *) "\x5hq-15", 6))
+            (unsigned char []) { 5, 'h', 'q', '-', '1',
+                enc_sess->esi_conn->cn_version == LSQVER_ID15 ? '5' :
+                enc_sess->esi_conn->cn_version == LSQVER_ID16 ? '6' :
+                'x' }, 6))
     {
         LSQ_ERROR("cannot set ALPN: %s",
             ERR_error_string(ERR_get_error(), errbuf));
@@ -723,6 +726,8 @@ iquic_esfi_handshake (enc_session_t *enc_session_p)
 {
     struct enc_sess_iquic *const enc_sess = enc_session_p;
     int s, err;
+    const unsigned char *alpn;
+    unsigned alpn_len;
     char errbuf[ERR_ERROR_STRING_BUF_LEN];
 
     s = SSL_do_handshake(enc_sess->esi_ssl);
@@ -744,6 +749,11 @@ iquic_esfi_handshake (enc_session_t *enc_session_p)
     }
 
     LSQ_DEBUG("handshake reported complete");
+    SSL_get0_alpn_selected(enc_sess->esi_ssl, &alpn, &alpn_len);
+    if (alpn)
+        LSQ_DEBUG("Selected ALPN %.*s", (int) alpn_len, (char *) alpn);
+    else
+        LSQ_DEBUG("No ALPN is selected");
 
     enc_sess->esi_header_type = HETY_HANDSHAKE;
     enc_sess->esi_flags |= ESI_HANDSHAKE_OK;
