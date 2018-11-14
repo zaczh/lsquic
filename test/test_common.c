@@ -1092,6 +1092,11 @@ set_engine_option (struct lsquic_engine_settings *settings,
             settings->es_support_tcid0 = atoi(val);
             return 0;
         }
+        if (0 == strncmp(name, "init_max_data", 13))
+        {
+            settings->es_init_max_data = atoi(val);
+            return 0;
+        }
         break;
     case 14:
         if (0 == strncmp(name, "max_streams_in", 14))
@@ -1147,6 +1152,27 @@ set_engine_option (struct lsquic_engine_settings *settings,
             settings->es_qpack_dec_max_blocked = atoi(val);
             return 0;
         }
+        break;
+    case 23:
+        if (0 == strncmp(name, "init_max_stream_data_uni", 23))
+        {
+            settings->es_init_max_stream_data_uni = atoi(val);
+            return 0;
+        }
+        break;
+    case 31:
+        if (0 == strncmp(name, "init_max_stream_data_bidi_local", 31))
+        {
+            settings->es_init_max_stream_data_bidi_local = atoi(val);
+            return 0;
+        }
+    case 32:
+        if (0 == strncmp(name, "init_max_stream_data_bidi_remote", 32))
+        {
+            settings->es_init_max_stream_data_bidi_remote = atoi(val);
+            return 0;
+        }
+        break;
     }
 
     return -1;

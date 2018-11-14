@@ -785,7 +785,7 @@ collect_stream_counts (const struct full_conn *conn, int peer,
         {
             ++counts[SCNT_PEER];
             counts[SCNT_CLOSED] += lsquic_stream_is_closed(stream);
-            counts[SCNT_RESET] += lsquic_stream_is_reset(stream);
+            counts[SCNT_RESET] += !!lsquic_stream_is_reset(stream);
             counts[SCNT_RES_UNCLO] += lsquic_stream_is_reset(stream)
                                         && !lsquic_stream_is_closed(stream);
         }
@@ -1249,7 +1249,7 @@ process_stream_frame (struct full_conn *conn, lsquic_packet_in_t *packet_in,
     }
 
     if (stream->id == LSQUIC_GQUIC_STREAM_HANDSHAKE
-        && (stream->stream_flags & STREAM_WANT_READ)
+        && (stream->sm_qflags & SMQF_WANT_READ)
         && !(conn->fc_flags & FC_SERVER)
         && !(conn->fc_conn.cn_flags & LSCONN_HANDSHAKE_DONE))
     {   /* To enable decryption, process handshake stream as soon as its
@@ -2349,11 +2349,11 @@ static int
 process_stream_ready_to_send (struct full_conn *conn, lsquic_stream_t *stream)
 {
     int r = 1;
-    if (stream->stream_flags & STREAM_SEND_WUF)
+    if (stream->sm_qflags & SMQF_SEND_WUF)
         r &= generate_wuf_stream(conn, stream);
-    if (stream->stream_flags & STREAM_SEND_BLOCKED)
+    if (stream->sm_qflags & SMQF_SEND_BLOCKED)
         r &= generate_stream_blocked_frame(conn, stream);
-    if (stream->stream_flags & STREAM_SEND_RST)
+    if (stream->sm_qflags & SMQF_SEND_RST)
         r &= generate_rst_stream_frame(conn, stream);
     return r;
 }
@@ -2370,7 +2370,7 @@ process_streams_ready_to_send (struct full_conn *conn)
     lsquic_spi_init(&spi, TAILQ_FIRST(&conn->fc_pub.sending_streams),
         TAILQ_LAST(&conn->fc_pub.sending_streams, lsquic_streams_tailq),
         (uintptr_t) &TAILQ_NEXT((lsquic_stream_t *) NULL, next_send_stream),
-        STREAM_SENDING_FLAGS, &conn->fc_conn, "send");
+        SMQF_SENDING_FLAGS, &conn->fc_conn, "send");
 
     for (stream = lsquic_spi_first(&spi); stream;
                                             stream = lsquic_spi_next(&spi))
@@ -2472,18 +2472,18 @@ service_streams (struct full_conn *conn)
     for (stream = TAILQ_FIRST(&conn->fc_pub.service_streams); stream; stream = next)
     {
         next = TAILQ_NEXT(stream, next_service_stream);
-        if (stream->stream_flags & STREAM_ABORT_CONN)
+        if (stream->sm_qflags & SMQF_ABORT_CONN)
             /* No need to unset this flag or remove this stream: the connection
              * is about to be aborted.
              */
             ABORT_ERROR("aborted due to error in stream %"PRIu64, stream->id);
-        if (stream->stream_flags & STREAM_CALL_ONCLOSE)
+        if (stream->sm_qflags & SMQF_CALL_ONCLOSE)
         {
             lsquic_stream_call_on_close(stream);
             closed_some |= is_our_stream(conn, stream);
             conn_mark_stream_closed(conn, stream->id);
         }
-        if (stream->stream_flags & STREAM_FREE_STREAM)
+        if (stream->sm_qflags & SMQF_FREE_STREAM)
         {
             TAILQ_REMOVE(&conn->fc_pub.service_streams, stream, next_service_stream);
             el = lsquic_hash_find(conn->fc_pub.all_streams, &stream->id, sizeof(stream->id));
@@ -2520,7 +2520,7 @@ process_streams_read_events (struct full_conn *conn)
     lsquic_spi_init(&spi, TAILQ_FIRST(&conn->fc_pub.read_streams),
         TAILQ_LAST(&conn->fc_pub.read_streams, lsquic_streams_tailq),
         (uintptr_t) &TAILQ_NEXT((lsquic_stream_t *) NULL, next_read_stream),
-        STREAM_WANT_READ, &conn->fc_conn, "read");
+        SMQF_WANT_READ, &conn->fc_conn, "read");
 
     for (stream = lsquic_spi_first(&spi); stream;
                                             stream = lsquic_spi_next(&spi))
@@ -2551,7 +2551,7 @@ process_streams_write_events (struct full_conn *conn, int high_prio)
     lsquic_spi_init(&spi, TAILQ_FIRST(&conn->fc_pub.write_streams),
         TAILQ_LAST(&conn->fc_pub.write_streams, lsquic_streams_tailq),
         (uintptr_t) &TAILQ_NEXT((lsquic_stream_t *) NULL, next_write_stream),
-        STREAM_WANT_WRITE|STREAM_WANT_FLUSH, &conn->fc_conn,
+        SMQF_WANT_WRITE|SMQF_WANT_FLUSH, &conn->fc_conn,
         high_prio ? "write-high" : "write-low");
 
     if (high_prio)

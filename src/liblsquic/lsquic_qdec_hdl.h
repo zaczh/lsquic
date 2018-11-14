@@ -62,6 +62,10 @@ lsquic_qdh_header_in_continue (struct qpack_dec_hdl *, struct lsquic_stream *,
 void
 lsquic_qdh_unref_stream (struct qpack_dec_hdl *, struct lsquic_stream *);
 
+void
+lsquic_qdh_cancel_stream (struct qpack_dec_hdl *,
+                                                struct lsquic_stream *);
+
 extern const struct lsquic_stream_if *const lsquic_qdh_enc_sm_in_if;
 extern const struct lsquic_stream_if *const lsquic_qdh_dec_sm_out_if;
 

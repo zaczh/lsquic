@@ -97,7 +97,7 @@ static int
 stream_flush_nocheck (lsquic_stream_t *stream);
 
 static void
-maybe_remove_from_write_q (lsquic_stream_t *stream, enum stream_flags flag);
+maybe_remove_from_write_q (lsquic_stream_t *stream, enum stream_q_flags flag);
 
 enum swtp_status { SWTP_OK, SWTP_STOP, SWTP_ERROR };
 
@@ -136,6 +136,9 @@ stream_readable_http_ietf (struct lsquic_stream *stream);
 
 static ssize_t
 stream_write_buf (struct lsquic_stream *stream, const void *buf, size_t sz);
+
+static size_t
+active_hq_frame_sizes (const struct lsquic_stream *);
 
 const struct stream_filter_if hq_stream_filter_if =
 {
@@ -275,7 +278,7 @@ maybe_conn_to_tickable_if_writeable (lsquic_stream_t *stream,
 static int
 stream_stalled (const lsquic_stream_t *stream)
 {
-    return 0 == (stream->stream_flags & (STREAM_WANT_WRITE|STREAM_WANT_READ)) &&
+    return 0 == (stream->sm_qflags & (SMQF_WANT_WRITE|SMQF_WANT_READ)) &&
            ((STREAM_U_READ_DONE|STREAM_U_WRITE_DONE) & stream->stream_flags)
                                     != (STREAM_U_READ_DONE|STREAM_U_WRITE_DONE);
 }
@@ -484,8 +487,8 @@ drop_buffered_data (struct lsquic_stream *stream)
 {
     decr_conn_cap(stream, stream->sm_n_buffered);
     stream->sm_n_buffered = 0;
-    if (stream->stream_flags & STREAM_WRITE_Q_FLAGS)
-        maybe_remove_from_write_q(stream, STREAM_WRITE_Q_FLAGS);
+    if (stream->sm_qflags & SMQF_WRITE_Q_FLAGS)
+        maybe_remove_from_write_q(stream, SMQF_WRITE_Q_FLAGS);
 }
 
 
@@ -513,15 +516,15 @@ lsquic_stream_destroy (lsquic_stream_t *stream)
         stream->stream_flags |= STREAM_ONCLOSE_DONE;
         stream->stream_if->on_close(stream, stream->st_ctx);
     }
-    if (stream->stream_flags & STREAM_SENDING_FLAGS)
+    if (stream->sm_qflags & SMQF_SENDING_FLAGS)
         TAILQ_REMOVE(&stream->conn_pub->sending_streams, stream, next_send_stream);
-    if (stream->stream_flags & STREAM_WANT_READ)
+    if (stream->sm_qflags & SMQF_WANT_READ)
         TAILQ_REMOVE(&stream->conn_pub->read_streams, stream, next_read_stream);
-    if (stream->stream_flags & STREAM_WRITE_Q_FLAGS)
+    if (stream->sm_qflags & SMQF_WRITE_Q_FLAGS)
         TAILQ_REMOVE(&stream->conn_pub->write_streams, stream, next_write_stream);
-    if (stream->stream_flags & STREAM_SERVICE_FLAGS)
+    if (stream->sm_qflags & SMQF_SERVICE_FLAGS)
         TAILQ_REMOVE(&stream->conn_pub->service_streams, stream, next_service_stream);
-    if (stream->stream_flags & STREAM_QPACK_DEC)
+    if (stream->sm_qflags & SMQF_QPACK_DEC)
         lsquic_qdh_unref_stream(stream->conn_pub->u.ietf.qdh, stream);
     drop_buffered_data(stream);
     lsquic_sfcw_consume_rem(&stream->fc);
@@ -552,7 +555,7 @@ stream_is_finished (const lsquic_stream_t *stream)
            /* This checks that no packets that reference this stream will
             * become outstanding:
             */
-        && 0 == (stream->stream_flags & STREAM_SEND_RST)
+        && 0 == (stream->sm_qflags & SMQF_SEND_RST)
         && ((stream->stream_flags & STREAM_FORCE_FINISH)
           || ((stream->stream_flags & (STREAM_FIN_SENT |STREAM_RST_SENT))
            && (stream->stream_flags & (STREAM_FIN_RECVD|STREAM_RST_RECVD))));
@@ -567,10 +570,11 @@ maybe_finish_stream (lsquic_stream_t *stream)
     {
         LSQ_DEBUG("stream is now finished");
         SM_HISTORY_APPEND(stream, SHE_FINISHED);
-        if (0 == (stream->stream_flags & STREAM_SERVICE_FLAGS))
+        if (0 == (stream->sm_qflags & SMQF_SERVICE_FLAGS))
             TAILQ_INSERT_TAIL(&stream->conn_pub->service_streams, stream,
                                                     next_service_stream);
-        stream->stream_flags |= STREAM_FREE_STREAM|STREAM_FINISHED;
+        stream->sm_qflags |= SMQF_FREE_STREAM;
+        stream->stream_flags |= STREAM_FINISHED;
     }
 }
 
@@ -579,13 +583,14 @@ static void
 maybe_schedule_call_on_close (lsquic_stream_t *stream)
 {
     if ((stream->stream_flags & (STREAM_U_READ_DONE|STREAM_U_WRITE_DONE|
-                     STREAM_ONNEW_DONE|STREAM_ONCLOSE_DONE|STREAM_CALL_ONCLOSE))
-            == (STREAM_U_READ_DONE|STREAM_U_WRITE_DONE|STREAM_ONNEW_DONE))
+                     STREAM_ONNEW_DONE|STREAM_ONCLOSE_DONE))
+            == (STREAM_U_READ_DONE|STREAM_U_WRITE_DONE|STREAM_ONNEW_DONE)
+            && !(stream->sm_qflags & SMQF_CALL_ONCLOSE))
     {
-        if (0 == (stream->stream_flags & STREAM_SERVICE_FLAGS))
+        if (0 == (stream->sm_qflags & SMQF_SERVICE_FLAGS))
             TAILQ_INSERT_TAIL(&stream->conn_pub->service_streams, stream,
                                                     next_service_stream);
-        stream->stream_flags |= STREAM_CALL_ONCLOSE;
+        stream->sm_qflags |= SMQF_CALL_ONCLOSE;
         LSQ_DEBUG("scheduled calling on_close");
         SM_HISTORY_APPEND(stream, SHE_ONCLOSE_SCHED);
     }
@@ -596,8 +601,8 @@ void
 lsquic_stream_call_on_close (lsquic_stream_t *stream)
 {
     assert(stream->stream_flags & STREAM_ONNEW_DONE);
-    stream->stream_flags &= ~STREAM_CALL_ONCLOSE;
-    if (!(stream->stream_flags & STREAM_SERVICE_FLAGS))
+    stream->sm_qflags &= ~SMQF_CALL_ONCLOSE;
+    if (!(stream->sm_qflags & SMQF_SERVICE_FLAGS))
         TAILQ_REMOVE(&stream->conn_pub->service_streams, stream,
                                                     next_service_stream);
     if (0 == (stream->stream_flags & STREAM_ONCLOSE_DONE))
@@ -661,7 +666,7 @@ lsquic_stream_readable (struct lsquic_stream *stream)
          *   lsquic_stream_read() will return -1 (we want the user to be
          *   able to collect the error).
          */
-        ||  (stream->stream_flags & STREAM_RST_FLAGS)
+        ||  lsquic_stream_is_reset(stream)
         /* Type-dependent readability check: */
         ||  stream->sm_readable(stream);
     ;
@@ -672,9 +677,11 @@ static size_t
 stream_write_avail (struct lsquic_stream *stream)
 {
     uint64_t stream_avail, conn_avail;
+    size_t hq_frames_sz;
 
+    hq_frames_sz = active_hq_frame_sizes(stream);
     stream_avail = stream->max_send_off - stream->tosend_off
-                                                - stream->sm_n_buffered;
+                                    - stream->sm_n_buffered - hq_frames_sz;
     if (stream->stream_flags & STREAM_CONN_LIMITED)
     {
         conn_avail = lsquic_conn_cap_avail(&stream->conn_pub->conn_cap);
@@ -732,10 +739,10 @@ lsquic_stream_update_sfcw (lsquic_stream_t *stream, uint64_t max_off)
     }
     if (lsquic_sfcw_fc_offsets_changed(&stream->fc))
     {
-        if (!(stream->stream_flags & STREAM_SENDING_FLAGS))
+        if (!(stream->sm_qflags & SMQF_SENDING_FLAGS))
             TAILQ_INSERT_TAIL(&stream->conn_pub->sending_streams, stream,
                                                     next_send_stream);
-        stream->stream_flags |= STREAM_SEND_WUF;
+        stream->sm_qflags |= SMQF_SEND_WUF;
     }
     return 0;
 }
@@ -888,8 +895,8 @@ lsquic_stream_rst_in (lsquic_stream_t *stream, uint64_t offset,
     drop_buffered_data(stream);
     maybe_elide_stream_frames(stream);
 
-    if (!(stream->stream_flags &
-                        (STREAM_SEND_RST|STREAM_RST_SENT|STREAM_FIN_SENT)))
+    if (!(stream->stream_flags & (STREAM_RST_SENT|STREAM_FIN_SENT))
+                                    && !(stream->sm_qflags & SMQF_SEND_RST))
         lsquic_stream_reset_ext(stream, 7 /* QUIC_RST_ACKNOWLEDGEMENT */, 0);
 
     stream->stream_flags |= STREAM_RST_RECVD;
@@ -904,21 +911,54 @@ lsquic_stream_rst_in (lsquic_stream_t *stream, uint64_t offset,
 uint64_t
 lsquic_stream_fc_recv_off (lsquic_stream_t *stream)
 {
-    assert(stream->stream_flags & STREAM_SEND_WUF);
-    stream->stream_flags &= ~STREAM_SEND_WUF;
-    if (!(stream->stream_flags & STREAM_SENDING_FLAGS))
+    assert(stream->sm_qflags & SMQF_SEND_WUF);
+    stream->sm_qflags &= ~SMQF_SEND_WUF;
+    if (!(stream->sm_qflags & SMQF_SENDING_FLAGS))
         TAILQ_REMOVE(&stream->conn_pub->sending_streams, stream, next_send_stream);
-    return lsquic_sfcw_get_fc_recv_off(&stream->fc);
+    return stream->sm_last_recv_off = lsquic_sfcw_get_fc_recv_off(&stream->fc);
+}
+
+
+void
+lsquic_stream_peer_blocked (struct lsquic_stream *stream, uint64_t peer_off)
+{
+    uint64_t last_off;
+
+    if (stream->sm_last_recv_off)
+        last_off = stream->sm_last_recv_off;
+    else
+        /* This gets advertized in transport parameters */
+        last_off = lsquic_sfcw_get_max_recv_off(&stream->fc);
+
+    LSQ_DEBUG("Peer blocked at %"PRIu64", while the last MAX_STREAM_DATA "
+        "frame we sent advertized the limit of %"PRIu64, peer_off, last_off);
+
+    if (peer_off > last_off && !(stream->sm_qflags & SMQF_SEND_WUF))
+    {
+        if (!(stream->sm_qflags & SMQF_SENDING_FLAGS))
+            TAILQ_INSERT_TAIL(&stream->conn_pub->sending_streams, stream,
+                                                    next_send_stream);
+        stream->sm_qflags |= SMQF_SEND_WUF;
+        LSQ_DEBUG("marked to send MAX_STREAM_DATA frame");
+    }
+    else if (stream->sm_qflags & SMQF_SEND_WUF)
+        LSQ_DEBUG("MAX_STREAM_DATA frame is already scheduled");
+    else if (stream->sm_last_recv_off)
+        LSQ_DEBUG("MAX_STREAM_DATA(%"PRIu64") has already been either "
+            "packetized or sent", stream->sm_last_recv_off);
+    else
+        LSQ_INFO("Peer should have receive transport param limit "
+            "of %"PRIu64"; odd.", last_off);
 }
 
 
 void
 lsquic_stream_blocked_frame_sent (lsquic_stream_t *stream)
 {
-    assert(stream->stream_flags & STREAM_SEND_BLOCKED);
+    assert(stream->sm_qflags & SMQF_SEND_BLOCKED);
     SM_HISTORY_APPEND(stream, SHE_BLOCKED_OUT);
-    stream->stream_flags &= ~STREAM_SEND_BLOCKED;
-    if (!(stream->stream_flags & STREAM_SENDING_FLAGS))
+    stream->sm_qflags &= ~SMQF_SEND_BLOCKED;
+    if (!(stream->sm_qflags & SMQF_SENDING_FLAGS))
         TAILQ_REMOVE(&stream->conn_pub->sending_streams, stream, next_send_stream);
 }
 
@@ -926,10 +966,10 @@ lsquic_stream_blocked_frame_sent (lsquic_stream_t *stream)
 void
 lsquic_stream_rst_frame_sent (lsquic_stream_t *stream)
 {
-    assert(stream->stream_flags & STREAM_SEND_RST);
+    assert(stream->sm_qflags & SMQF_SEND_RST);
     SM_HISTORY_APPEND(stream, SHE_RST_OUT);
-    stream->stream_flags &= ~STREAM_SEND_RST;
-    if (!(stream->stream_flags & STREAM_SENDING_FLAGS))
+    stream->sm_qflags &= ~SMQF_SEND_RST;
+    if (!(stream->sm_qflags & SMQF_SENDING_FLAGS))
         TAILQ_REMOVE(&stream->conn_pub->sending_streams, stream, next_send_stream);
     stream->stream_flags |= STREAM_RST_SENT;
     maybe_finish_stream(stream);
@@ -967,9 +1007,10 @@ stream_consumed_bytes (struct lsquic_stream *stream)
     lsquic_sfcw_set_read_off(&stream->fc, stream->read_offset);
     if (lsquic_sfcw_fc_offsets_changed(&stream->fc))
     {
-        if (!(stream->stream_flags & STREAM_SENDING_FLAGS))
-            TAILQ_INSERT_TAIL(&stream->conn_pub->sending_streams, stream, next_send_stream);
-        stream->stream_flags |= STREAM_SEND_WUF;
+        if (!(stream->sm_qflags & SMQF_SENDING_FLAGS))
+            TAILQ_INSERT_TAIL(&stream->conn_pub->sending_streams, stream,
+                                                            next_send_stream);
+        stream->sm_qflags |= SMQF_SEND_WUF;
         maybe_conn_to_tickable_if_writeable(stream, 1);
     }
 }
@@ -1133,7 +1174,7 @@ lsquic_stream_readf (struct lsquic_stream *stream,
 {
     SM_HISTORY_APPEND(stream, SHE_USER_READ);
 
-    if (stream->stream_flags & STREAM_RST_FLAGS)
+    if (lsquic_stream_is_reset(stream))
     {
         errno = ECONNRESET;
         return -1;
@@ -1233,8 +1274,8 @@ stream_shutdown_write (lsquic_stream_t *stream)
     /* Don't bother to check whether there is anything else to write if
      * the flags indicate that nothing else should be written.
      */
-    if (!(stream->stream_flags &
-                    (STREAM_FIN_SENT|STREAM_SEND_RST|STREAM_RST_SENT)))
+    if (!(stream->stream_flags & (STREAM_FIN_SENT|STREAM_RST_SENT))
+                                    && !(stream->sm_qflags & SMQF_SEND_RST))
     {
         if (stream->sm_n_buffered == 0)
         {
@@ -1313,10 +1354,10 @@ fake_reset_unused_stream (lsquic_stream_t *stream)
     ;
 
     /* Cancel all writes to the network scheduled for this stream: */
-    if (stream->stream_flags & STREAM_SENDING_FLAGS)
+    if (stream->sm_qflags & SMQF_SENDING_FLAGS)
         TAILQ_REMOVE(&stream->conn_pub->sending_streams, stream,
                                                 next_send_stream);
-    stream->stream_flags &= ~STREAM_SENDING_FLAGS;
+    stream->sm_qflags &= ~SMQF_SENDING_FLAGS;
 
     LSQ_DEBUG("fake-reset stream%s",
                     stream_stalled(stream) ? " (stalled)" : "");
@@ -1362,7 +1403,7 @@ lsquic_stream_read_offset (const lsquic_stream_t *stream)
 static int
 stream_wantread (lsquic_stream_t *stream, int is_want)
 {
-    const int old_val = !!(stream->stream_flags & STREAM_WANT_READ);
+    const int old_val = !!(stream->sm_qflags & SMQF_WANT_READ);
     const int new_val = !!is_want;
     if (old_val != new_val)
     {
@@ -1371,11 +1412,11 @@ stream_wantread (lsquic_stream_t *stream, int is_want)
             if (!old_val)
                 TAILQ_INSERT_TAIL(&stream->conn_pub->read_streams, stream,
                                                             next_read_stream);
-            stream->stream_flags |= STREAM_WANT_READ;
+            stream->sm_qflags |= SMQF_WANT_READ;
         }
         else
         {
-            stream->stream_flags &= ~STREAM_WANT_READ;
+            stream->sm_qflags &= ~SMQF_WANT_READ;
             if (old_val)
                 TAILQ_REMOVE(&stream->conn_pub->read_streams, stream,
                                                             next_read_stream);
@@ -1386,24 +1427,24 @@ stream_wantread (lsquic_stream_t *stream, int is_want)
 
 
 static void
-maybe_put_onto_write_q (lsquic_stream_t *stream, enum stream_flags flag)
+maybe_put_onto_write_q (lsquic_stream_t *stream, enum stream_q_flags flag)
 {
-    assert(STREAM_WRITE_Q_FLAGS & flag);
-    if (!(stream->stream_flags & STREAM_WRITE_Q_FLAGS))
+    assert(SMQF_WRITE_Q_FLAGS & flag);
+    if (!(stream->sm_qflags & SMQF_WRITE_Q_FLAGS))
         TAILQ_INSERT_TAIL(&stream->conn_pub->write_streams, stream,
                                                         next_write_stream);
-    stream->stream_flags |= flag;
+    stream->sm_qflags |= flag;
 }
 
 
 static void
-maybe_remove_from_write_q (lsquic_stream_t *stream, enum stream_flags flag)
+maybe_remove_from_write_q (lsquic_stream_t *stream, enum stream_q_flags flag)
 {
-    assert(STREAM_WRITE_Q_FLAGS & flag);
-    if (stream->stream_flags & flag)
+    assert(SMQF_WRITE_Q_FLAGS & flag);
+    if (stream->sm_qflags & flag)
     {
-        stream->stream_flags &= ~flag;
-        if (!(stream->stream_flags & STREAM_WRITE_Q_FLAGS))
+        stream->sm_qflags &= ~flag;
+        if (!(stream->sm_qflags & SMQF_WRITE_Q_FLAGS))
             TAILQ_REMOVE(&stream->conn_pub->write_streams, stream,
                                                         next_write_stream);
     }
@@ -1413,14 +1454,14 @@ maybe_remove_from_write_q (lsquic_stream_t *stream, enum stream_flags flag)
 static int
 stream_wantwrite (lsquic_stream_t *stream, int is_want)
 {
-    const int old_val = !!(stream->stream_flags & STREAM_WANT_WRITE);
+    const int old_val = !!(stream->sm_qflags & SMQF_WANT_WRITE);
     const int new_val = !!is_want;
     if (old_val != new_val)
     {
         if (new_val)
-            maybe_put_onto_write_q(stream, STREAM_WANT_WRITE);
+            maybe_put_onto_write_q(stream, SMQF_WANT_WRITE);
         else
-            maybe_remove_from_write_q(stream, STREAM_WANT_WRITE);
+            maybe_remove_from_write_q(stream, SMQF_WANT_WRITE);
     }
     return old_val;
 }
@@ -1460,30 +1501,52 @@ lsquic_stream_wantwrite (lsquic_stream_t *stream, int is_want)
 }
 
 
-#define USER_PROGRESS_FLAGS (STREAM_WANT_READ|STREAM_WANT_WRITE|            \
-    STREAM_WANT_FLUSH|STREAM_U_WRITE_DONE|STREAM_U_READ_DONE|STREAM_SEND_RST)
+struct progress
+{
+    enum stream_flags   s_flags;
+    enum stream_q_flags q_flags;
+};
+
+
+static struct progress
+stream_progress (const struct lsquic_stream *stream)
+{
+    return (struct progress) {
+        .s_flags = stream->stream_flags
+          & (STREAM_U_WRITE_DONE|STREAM_U_READ_DONE),
+        .q_flags = stream->sm_qflags
+          & (SMQF_WANT_READ|SMQF_WANT_WRITE|SMQF_WANT_FLUSH|SMQF_SEND_RST),
+    };
+}
+
+
+static int
+progress_eq (struct progress a, struct progress b)
+{
+    return a.s_flags == b.s_flags && a.q_flags == b.q_flags;
+}
 
 
 static void
 stream_dispatch_read_events_loop (lsquic_stream_t *stream)
 {
     unsigned no_progress_count, no_progress_limit;
-    enum stream_flags flags;
+    struct progress progress;
     uint64_t size;
 
     no_progress_limit = stream->conn_pub->enpub->enp_settings.es_progress_check;
 
     no_progress_count = 0;
-    while ((stream->stream_flags & STREAM_WANT_READ)
+    while ((stream->sm_qflags & SMQF_WANT_READ)
                                             && lsquic_stream_readable(stream))
     {
-        flags = stream->stream_flags & USER_PROGRESS_FLAGS;
+        progress = stream_progress(stream);
         size  = stream->read_offset;
 
         stream->stream_if->on_read(stream, stream->st_ctx);
 
         if (no_progress_limit && size == stream->read_offset &&
-                        flags == (stream->stream_flags & USER_PROGRESS_FLAGS))
+                                progress_eq(progress, stream_progress(stream)))
         {
             ++no_progress_count;
             if (no_progress_count >= no_progress_limit)
@@ -1560,23 +1623,22 @@ stream_dispatch_write_events_loop (lsquic_stream_t *stream)
 {
     unsigned no_progress_count, no_progress_limit;
     void (*on_write) (struct lsquic_stream *, lsquic_stream_ctx_t *);
-    enum stream_flags flags;
+    struct progress progress;
 
     no_progress_limit = stream->conn_pub->enpub->enp_settings.es_progress_check;
 
     no_progress_count = 0;
     stream->stream_flags |= STREAM_LAST_WRITE_OK;
-    while ((stream->stream_flags & (STREAM_WANT_WRITE|STREAM_LAST_WRITE_OK))
-                                == (STREAM_WANT_WRITE|STREAM_LAST_WRITE_OK)
-           && lsquic_stream_write_avail(stream))
+    while ((stream->sm_qflags & SMQF_WANT_WRITE)
+                && (stream->stream_flags & STREAM_LAST_WRITE_OK)
+                       && lsquic_stream_write_avail(stream))
     {
-        flags = stream->stream_flags & USER_PROGRESS_FLAGS;
+        progress = stream_progress(stream);
 
         on_write = select_on_write(stream);
         on_write(stream, stream->st_ctx);
 
-        if (no_progress_limit &&
-            flags == (stream->stream_flags & USER_PROGRESS_FLAGS))
+        if (no_progress_limit && progress_eq(progress, stream_progress(stream)))
         {
             ++no_progress_count;
             if (no_progress_count >= no_progress_limit)
@@ -1597,10 +1659,20 @@ stream_dispatch_write_events_loop (lsquic_stream_t *stream)
 static void
 stream_dispatch_read_events_once (lsquic_stream_t *stream)
 {
-    if ((stream->stream_flags & STREAM_WANT_READ) && lsquic_stream_readable(stream))
+    if ((stream->sm_qflags & SMQF_WANT_READ) && lsquic_stream_readable(stream))
     {
         stream->stream_if->on_read(stream, stream->st_ctx);
     }
+}
+
+
+uint64_t
+lsquic_stream_combined_send_off (const struct lsquic_stream *stream)
+{
+    size_t frames_sizes;
+
+    frames_sizes = active_hq_frame_sizes(stream);
+    return stream->tosend_off + stream->sm_n_buffered + frames_sizes;
 }
 
 
@@ -1608,16 +1680,18 @@ static void
 maybe_mark_as_blocked (lsquic_stream_t *stream)
 {
     struct lsquic_conn_cap *cc;
+    uint64_t used;
 
-    if (stream->max_send_off == stream->tosend_off + stream->sm_n_buffered)
+    used = lsquic_stream_combined_send_off(stream);
+    if (stream->max_send_off == used)
     {
         if (stream->blocked_off < stream->max_send_off)
         {
-            stream->blocked_off = stream->max_send_off + stream->sm_n_buffered;
-            if (!(stream->stream_flags & STREAM_SENDING_FLAGS))
+            stream->blocked_off = used;
+            if (!(stream->sm_qflags & SMQF_SENDING_FLAGS))
                 TAILQ_INSERT_TAIL(&stream->conn_pub->sending_streams, stream,
                                                             next_send_stream);
-            stream->stream_flags |= STREAM_SEND_BLOCKED;
+            stream->sm_qflags |= SMQF_SEND_BLOCKED;
             LSQ_DEBUG("marked stream-blocked at stream offset "
                                             "%"PRIu64, stream->blocked_off);
         }
@@ -1647,7 +1721,7 @@ maybe_mark_as_blocked (lsquic_stream_t *stream)
 void
 lsquic_stream_dispatch_read_events (lsquic_stream_t *stream)
 {
-    assert(stream->stream_flags & STREAM_WANT_READ);
+    assert(stream->sm_qflags & SMQF_WANT_READ);
 
     if (stream->stream_flags & STREAM_RW_ONCE)
         stream_dispatch_read_events_once(stream);
@@ -1663,19 +1737,19 @@ lsquic_stream_dispatch_write_events (lsquic_stream_t *stream)
     int progress;
     uint64_t tosend_off;
     unsigned short n_buffered;
-    enum stream_flags flags;
+    enum stream_q_flags q_flags;
 
-    assert(stream->stream_flags & STREAM_WRITE_Q_FLAGS);
-    flags = stream->stream_flags & STREAM_WRITE_Q_FLAGS;
+    assert(stream->sm_qflags & SMQF_WRITE_Q_FLAGS);
+    q_flags = stream->sm_qflags & SMQF_WRITE_Q_FLAGS;
     tosend_off = stream->tosend_off;
     n_buffered = stream->sm_n_buffered;
 
-    if (stream->stream_flags & STREAM_WANT_FLUSH)
+    if (stream->sm_qflags & SMQF_WANT_FLUSH)
         (void) stream_flush(stream);
 
     if (stream->stream_flags & STREAM_RW_ONCE)
     {
-        if ((stream->stream_flags & STREAM_WANT_WRITE)
+        if ((stream->sm_qflags & SMQF_WANT_WRITE)
             && lsquic_stream_write_avail(stream))
         {
             on_write = select_on_write(stream);
@@ -1686,11 +1760,11 @@ lsquic_stream_dispatch_write_events (lsquic_stream_t *stream)
         stream_dispatch_write_events_loop(stream);
 
     /* Progress means either flags or offsets changed: */
-    progress = !((stream->stream_flags & STREAM_WRITE_Q_FLAGS) == flags &&
+    progress = !((stream->sm_qflags & SMQF_WRITE_Q_FLAGS) == q_flags &&
                         stream->tosend_off == tosend_off &&
                             stream->sm_n_buffered == n_buffered);
 
-    if (stream->stream_flags & STREAM_WRITE_Q_FLAGS)
+    if (stream->sm_qflags & SMQF_WRITE_Q_FLAGS)
     {
         if (progress)
         {   /* Move the stream to the end of the list to ensure fairness. */
@@ -1723,7 +1797,7 @@ stream_flush (lsquic_stream_t *stream)
     struct lsquic_reader empty_reader;
     ssize_t nw;
 
-    assert(stream->stream_flags & STREAM_WANT_FLUSH);
+    assert(stream->sm_qflags & SMQF_WANT_FLUSH);
     assert(stream->sm_n_buffered > 0 ||
         /* Flushing is also used to packetize standalone FIN: */
         ((stream->stream_flags & (STREAM_U_WRITE_DONE|STREAM_FIN_SENT))
@@ -1748,7 +1822,7 @@ static int
 stream_flush_nocheck (lsquic_stream_t *stream)
 {
     stream->sm_flush_to = stream->tosend_off + stream->sm_n_buffered;
-    maybe_put_onto_write_q(stream, STREAM_WANT_FLUSH);
+    maybe_put_onto_write_q(stream, SMQF_WANT_FLUSH);
     LSQ_DEBUG("will flush up to offset %"PRIu64, stream->sm_flush_to);
 
     return stream_flush(stream);
@@ -1815,7 +1889,7 @@ lsquic_stream_flush_threshold (const struct lsquic_stream *stream,
         errno = EILSEQ;                                                     \
         return -1;                                                          \
     }                                                                       \
-    if (stream->stream_flags & STREAM_RST_FLAGS)                            \
+    if (lsquic_stream_is_reset(stream))                                     \
     {                                                                       \
         LSQ_INFO("Attempt to write to stream after it had been reset");     \
         errno = ECONNRESET;                                                 \
@@ -1869,6 +1943,25 @@ stream_hq_frame_size (const struct stream_hq_frame *shf)
         return 1 + (1 << vint_val2bits(shf->shf_frame_size));
     else
         return 1 + 1 + ((shf->shf_flags & SHF_TWO_BYTES) > 0);
+}
+
+
+static size_t
+active_hq_frame_sizes (const struct lsquic_stream *stream)
+{
+    const struct stream_hq_frame *shf;
+    size_t size;
+
+    size = 0;
+    if ((stream->stream_flags & (STREAM_IETF|STREAM_USE_HEADERS))
+                                        == (STREAM_IETF|STREAM_USE_HEADERS))
+        for (shf = stream->sm_hq_frames; shf < stream->sm_hq_frames
+                + sizeof(stream->sm_hq_frames) /
+                                    sizeof(stream->sm_hq_frames[0]); ++shf)
+            if (shf->shf_flags & SHF_ACTIVE)
+                size += stream_hq_frame_size(shf);
+
+    return size;
 }
 
 
@@ -2176,12 +2269,12 @@ crypto_frame_gen_read (void *ctx, void *buf, size_t len)
 static void
 check_flush_threshold (lsquic_stream_t *stream)
 {
-    if ((stream->stream_flags & STREAM_WANT_FLUSH) &&
+    if ((stream->sm_qflags & SMQF_WANT_FLUSH) &&
                             stream->tosend_off >= stream->sm_flush_to)
     {
         LSQ_DEBUG("flushed to or past required offset %"PRIu64,
                                                     stream->sm_flush_to);
-        maybe_remove_from_write_q(stream, STREAM_WANT_FLUSH);
+        maybe_remove_from_write_q(stream, SMQF_WANT_FLUSH);
     }
 }
 
@@ -2336,10 +2429,10 @@ stream_write_to_packet_crypto (struct frame_gen_ctx *fg_ctx, const size_t size)
 static void
 abort_connection (struct lsquic_stream *stream)
 {
-    if (0 == (stream->stream_flags & STREAM_SERVICE_FLAGS))
+    if (0 == (stream->sm_qflags & SMQF_SERVICE_FLAGS))
         TAILQ_INSERT_TAIL(&stream->conn_pub->service_streams, stream,
                                                 next_service_stream);
-    stream->stream_flags |= STREAM_ABORT_CONN;
+    stream->sm_qflags |= SMQF_ABORT_CONN;
     LSQ_WARN("connection will be aborted");
     maybe_conn_to_tickable(stream);
 }
@@ -2916,7 +3009,8 @@ void
 lsquic_stream_reset_ext (lsquic_stream_t *stream, uint32_t error_code,
                          int do_close)
 {
-    if (stream->stream_flags & (STREAM_SEND_RST|STREAM_RST_SENT))
+    if ((stream->stream_flags & STREAM_RST_SENT)
+                                    || (stream->sm_qflags & SMQF_SEND_RST))
     {
         LSQ_INFO("reset already sent");
         return;
@@ -2927,11 +3021,17 @@ lsquic_stream_reset_ext (lsquic_stream_t *stream, uint32_t error_code,
     LSQ_INFO("reset, error code 0x%X", error_code);
     stream->error_code = error_code;
 
-    if (!(stream->stream_flags & STREAM_SENDING_FLAGS))
+    if (!(stream->sm_qflags & SMQF_SENDING_FLAGS))
         TAILQ_INSERT_TAIL(&stream->conn_pub->sending_streams, stream,
                                                         next_send_stream);
-    stream->stream_flags &= ~STREAM_SENDING_FLAGS;
-    stream->stream_flags |= STREAM_SEND_RST;
+    stream->sm_qflags &= ~SMQF_SENDING_FLAGS;
+    stream->sm_qflags |= SMQF_SEND_RST;
+
+    if (stream->sm_qflags & SMQF_QPACK_DEC)
+    {
+        lsquic_qdh_cancel_stream(stream->conn_pub->u.ietf.qdh, stream);
+        stream->sm_qflags |= ~SMQF_QPACK_DEC;
+    }
 
     drop_buffered_data(stream);
     maybe_elide_stream_frames(stream);
@@ -3139,8 +3239,9 @@ lsquic_stream_get_ctx (const lsquic_stream_t *stream)
 int
 lsquic_stream_refuse_push (lsquic_stream_t *stream)
 {
-    if (lsquic_stream_is_pushed(stream) &&
-                !(stream->stream_flags & (STREAM_RST_SENT|STREAM_SEND_RST)))
+    if (lsquic_stream_is_pushed(stream)
+            && !(stream->sm_qflags & SMQF_SEND_RST)
+            && !(stream->stream_flags & STREAM_RST_SENT))
     {
         LSQ_DEBUG("refusing pushed stream: send reset");
         lsquic_stream_reset_ext(stream, 8 /* QUIC_REFUSED_STREAM */, 1);
@@ -3178,7 +3279,7 @@ lsquic_stream_get_hset (struct lsquic_stream *stream)
 {
     void *hset;
 
-    if (stream->stream_flags & STREAM_RST_FLAGS)
+    if (lsquic_stream_is_reset(stream))
     {
         LSQ_INFO("%s: stream is reset, no headers returned", __func__);
         errno = ECONNRESET;
@@ -3335,12 +3436,13 @@ hq_read (void *ctx, const unsigned char *buf, size_t sz, int fin)
                 {
                 case LQRHS_DONE:
                     assert(filter->hqfi_left == 0);
+                    stream->sm_qflags &= ~SMQF_QPACK_DEC;
                     break;
                 case LQRHS_NEED:
-                    stream->stream_flags |= STREAM_QPACK_DEC;
+                    stream->sm_qflags |= SMQF_QPACK_DEC;
                     break;
                 case LQRHS_BLOCKED:
-                    stream->stream_flags |= STREAM_QPACK_DEC;
+                    stream->sm_qflags |= SMQF_QPACK_DEC;
                     filter->hqfi_flags |= HQFI_FLAG_BLOCKED;
                     goto end;
                 default:

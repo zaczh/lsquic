@@ -575,12 +575,10 @@ test_loc_FIN_rem_FIN (struct test_objs *tobjs)
     s = lsquic_stream_shutdown(stream, 0);
     assert(0 == s);
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert((stream->stream_flags & (STREAM_SERVICE_FLAGS))
-                                == (STREAM_CALL_ONCLOSE));
+    assert((stream->sm_qflags & (SMQF_SERVICE_FLAGS)) == (SMQF_CALL_ONCLOSE));
     ack_packet(&tobjs->send_ctl, 1);
     ack_packet(&tobjs->send_ctl, 2);
-    assert((stream->stream_flags & (STREAM_SERVICE_FLAGS))
-                                == (STREAM_CALL_ONCLOSE|STREAM_FREE_STREAM));
+    assert((stream->sm_qflags & (SMQF_SERVICE_FLAGS)) == (SMQF_CALL_ONCLOSE|SMQF_FREE_STREAM));
 
     lsquic_stream_destroy(stream);
     assert(TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
@@ -648,8 +646,7 @@ test_rem_FIN_loc_FIN (struct test_objs *tobjs)
 
     /* Now we can call on_close: */
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert((stream->stream_flags & (STREAM_SERVICE_FLAGS))
-                                            == STREAM_CALL_ONCLOSE);
+    assert((stream->sm_qflags & (SMQF_SERVICE_FLAGS)) == SMQF_CALL_ONCLOSE);
 
     n = read_from_scheduled_packets(&tobjs->send_ctl, stream->id, buf,
                                                 sizeof(buf), 100, &fin, 0);
@@ -662,16 +659,14 @@ test_rem_FIN_loc_FIN (struct test_objs *tobjs)
 
     /* Cannot free stream yet: packets have not been acked */
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert((stream->stream_flags & (STREAM_SERVICE_FLAGS))
-                                            == STREAM_CALL_ONCLOSE);
+    assert((stream->sm_qflags & (SMQF_SERVICE_FLAGS)) == SMQF_CALL_ONCLOSE);
 
     ack_packet(&tobjs->send_ctl, 1);
     ack_packet(&tobjs->send_ctl, 2);
 
     /* Now we can free the stream: */
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert((stream->stream_flags & (STREAM_SERVICE_FLAGS))
-                                == (STREAM_CALL_ONCLOSE|STREAM_FREE_STREAM));
+    assert((stream->sm_qflags & (SMQF_SERVICE_FLAGS)) == (SMQF_CALL_ONCLOSE|SMQF_FREE_STREAM));
 
     lsquic_stream_destroy(stream);
     assert(TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
@@ -703,8 +698,7 @@ test_rem_data_loc_close (struct test_objs *tobjs)
     s = lsquic_stream_shutdown(stream, 0);
     assert(0 == s);
     assert(TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert(!((stream->stream_flags & (STREAM_SERVICE_FLAGS))
-                                            == STREAM_CALL_ONCLOSE));
+    assert(!((stream->sm_qflags & (SMQF_SERVICE_FLAGS)) == SMQF_CALL_ONCLOSE));
 
     n = lsquic_stream_read(stream, buf, 60);
     assert(n == -1);    /* Cannot read from closed stream */
@@ -716,8 +710,7 @@ test_rem_data_loc_close (struct test_objs *tobjs)
     assert(1 == lsquic_send_ctl_n_scheduled(&tobjs->send_ctl)); /* Shutdown performs a flush */
 
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert((stream->stream_flags & (STREAM_SERVICE_FLAGS))
-                                            == STREAM_CALL_ONCLOSE);
+    assert((stream->sm_qflags & (SMQF_SERVICE_FLAGS)) == SMQF_CALL_ONCLOSE);
 
     s = lsquic_stream_rst_in(stream, 100, 1);
     assert(0 == s);
@@ -792,7 +785,7 @@ test_loc_FIN_rem_RST (struct test_objs *tobjs)
 
     /* The stream is not yet done: the user code has not closed it yet */
     assert(TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert(0 == (stream->stream_flags & (STREAM_SERVICE_FLAGS)));
+    assert(0 == (stream->sm_qflags & (SMQF_SERVICE_FLAGS)));
     assert(0 == (stream->stream_flags & STREAM_U_READ_DONE));
 
     s = lsquic_stream_read(stream, buf, sizeof(buf));
@@ -801,15 +794,13 @@ test_loc_FIN_rem_RST (struct test_objs *tobjs)
     assert(0 == s);     /* Stream closed successfully */
 
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert((stream->stream_flags & (STREAM_SERVICE_FLAGS))
-                                == (STREAM_CALL_ONCLOSE));
+    assert((stream->sm_qflags & (SMQF_SERVICE_FLAGS)) == (SMQF_CALL_ONCLOSE));
 
     ack_packet(&tobjs->send_ctl, 1);
     ack_packet(&tobjs->send_ctl, 2);
 
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert((stream->stream_flags & (STREAM_SERVICE_FLAGS))
-                                == (STREAM_CALL_ONCLOSE|STREAM_FREE_STREAM));
+    assert((stream->sm_qflags & (SMQF_SERVICE_FLAGS)) == (SMQF_CALL_ONCLOSE|SMQF_FREE_STREAM));
 
     lsquic_stream_destroy(stream);
     assert(TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
@@ -860,12 +851,11 @@ test_loc_data_rem_RST (struct test_objs *tobjs)
     ack_packet(&tobjs->send_ctl, 1);
 
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.sending_streams));
-    assert((stream->stream_flags & STREAM_SENDING_FLAGS)
-                                            == STREAM_SEND_RST);
+    assert((stream->sm_qflags & SMQF_SENDING_FLAGS) == SMQF_SEND_RST);
 
     /* Not yet closed: error needs to be collected */
     assert(TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert(0 == (stream->stream_flags & STREAM_SERVICE_FLAGS));
+    assert(0 == (stream->sm_qflags & SMQF_SERVICE_FLAGS));
 
     n = lsquic_stream_write(stream, buf, 100);
     assert(-1 == n);    /* Error collected */
@@ -873,16 +863,14 @@ test_loc_data_rem_RST (struct test_objs *tobjs)
     assert(0 == s);     /* Stream successfully closed */
 
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert((stream->stream_flags & STREAM_SERVICE_FLAGS)
-                                        == STREAM_CALL_ONCLOSE);
+    assert((stream->sm_qflags & SMQF_SERVICE_FLAGS) == SMQF_CALL_ONCLOSE);
 
     lsquic_stream_rst_frame_sent(stream);
     lsquic_stream_call_on_close(stream);
 
     assert(TAILQ_EMPTY(&tobjs->conn_pub.sending_streams));
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert((stream->stream_flags & STREAM_SERVICE_FLAGS)
-                                        == STREAM_FREE_STREAM);
+    assert((stream->sm_qflags & SMQF_SERVICE_FLAGS) == SMQF_FREE_STREAM);
 
     lsquic_stream_destroy(stream);
     assert(TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
@@ -931,22 +919,19 @@ test_loc_RST_rem_FIN (struct test_objs *tobjs)
 
     lsquic_stream_reset(stream, 0);
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.sending_streams));
-    assert((stream->stream_flags & STREAM_SENDING_FLAGS)
-                                            == STREAM_SEND_RST);
+    assert((stream->sm_qflags & SMQF_SENDING_FLAGS) == SMQF_SEND_RST);
 
     s = lsquic_stream_frame_in(stream, new_frame_in(tobjs, 0, 90, 1));
     assert(s == 0);
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert((stream->stream_flags & STREAM_SERVICE_FLAGS)
-                                        == STREAM_CALL_ONCLOSE);
+    assert((stream->sm_qflags & SMQF_SERVICE_FLAGS) == SMQF_CALL_ONCLOSE);
 
     lsquic_stream_rst_frame_sent(stream);
     lsquic_stream_call_on_close(stream);
 
     assert(TAILQ_EMPTY(&tobjs->conn_pub.sending_streams));
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
-    assert((stream->stream_flags & STREAM_SERVICE_FLAGS)
-                                        == STREAM_FREE_STREAM);
+    assert((stream->sm_qflags & SMQF_SERVICE_FLAGS) == SMQF_FREE_STREAM);
 
     lsquic_stream_destroy(stream);
     assert(TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
@@ -2527,7 +2512,7 @@ test_window_update2 (void)
     assert(0 == s);
     assert(("cc_tosend is not updated when not limited by connection",
                                             0 == conn_cap->cc_sent));
-    assert(stream->stream_flags & STREAM_SEND_BLOCKED);
+    assert(stream->sm_qflags & SMQF_SEND_BLOCKED);
     nw = read_from_scheduled_packets(&tobjs.send_ctl, stream->id, buf,
                                                     sizeof(buf), 0, NULL, 0);
     assert(nw == 3);
@@ -2580,7 +2565,7 @@ test_blocked_flags (void)
     assert(0 == s);
     assert(("cc_tosend is updated when limited by connection",
                                             3 == conn_cap->cc_sent));
-    assert(stream->stream_flags & STREAM_SEND_BLOCKED);
+    assert(stream->sm_qflags & SMQF_SEND_BLOCKED);
     assert(3 == stream->blocked_off);
     assert(tobjs.lconn.cn_flags & LSCONN_SEND_BLOCKED);
     assert(3 == conn_cap->cc_blocked);
@@ -2648,7 +2633,7 @@ test_conn_abort (void)
     assert(10 == nw);   /* No error yet */
     s = lsquic_stream_flush(stream);
     assert(s < 0);
-    assert(stream->stream_flags & STREAM_ABORT_CONN);
+    assert(stream->sm_qflags & SMQF_ABORT_CONN);
     assert(!TAILQ_EMPTY(&tobjs.conn_pub.service_streams));
 
     lsquic_stream_destroy(stream);

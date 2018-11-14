@@ -67,13 +67,13 @@ test_same_priority (unsigned priority)
 
     TAILQ_INIT(&streams);
     TAILQ_INSERT_TAIL(&streams, stream_arr[0], next_write_stream);
-    stream_arr[0]->stream_flags |= flags;
+    stream_arr[0]->sm_qflags |= flags;
     TAILQ_INSERT_TAIL(&streams, stream_arr[1], next_write_stream);
-    stream_arr[1]->stream_flags |= flags;
+    stream_arr[1]->sm_qflags |= flags;
     TAILQ_INSERT_TAIL(&streams, stream_arr[2], next_write_stream);
-    stream_arr[2]->stream_flags |= flags;
+    stream_arr[2]->sm_qflags |= flags;
     TAILQ_INSERT_TAIL(&streams, stream_arr[3], next_write_stream);
-    stream_arr[3]->stream_flags |= flags;
+    stream_arr[3]->sm_qflags |= flags;
 
     lsquic_spi_init(&spi, TAILQ_FIRST(&streams),
         TAILQ_LAST(&streams, lsquic_streams_tailq),
@@ -121,7 +121,7 @@ test_different_priorities (int *priority)
         assert(*priority < 256);
         stream = new_stream(*priority);
         TAILQ_INSERT_TAIL(&streams, stream, next_send_stream);
-        stream->stream_flags |= flags;
+        stream->sm_qflags |= flags;
         ++n_streams;
     }
 
@@ -215,7 +215,7 @@ test_drop (const struct drop_test *test)
         lsquic_spi_init(&spi, TAILQ_FIRST(&streams),
             TAILQ_LAST(&streams, lsquic_streams_tailq),
             (uintptr_t) &TAILQ_NEXT((lsquic_stream_t *) NULL, next_write_stream),
-            STREAM_WRITE_Q_FLAGS, &lconn, __func__);
+            SMQF_WRITE_Q_FLAGS, &lconn, __func__);
 
         if (drop_high)
             lsquic_spi_drop_high(&spi);

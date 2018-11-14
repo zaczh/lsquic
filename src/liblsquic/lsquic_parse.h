@@ -201,6 +201,22 @@ struct parse_funcs
     int
     (*pf_parse_new_conn_id) (const unsigned char *, size_t, uint64_t *,
                                                                 lsquic_cid_t *);
+    unsigned
+    (*pf_stream_blocked_frame_size) (lsquic_stream_id_t, uint64_t);
+    int
+    (*pf_gen_stream_blocked_frame) (unsigned char *buf, size_t,
+                                                lsquic_stream_id_t, uint64_t);
+    int
+    (*pf_parse_stream_blocked_frame) (const unsigned char *buf, size_t,
+                                            lsquic_stream_id_t *, uint64_t *);
+    unsigned
+    (*pf_max_stream_data_frame_size) (lsquic_stream_id_t, uint64_t);
+    int
+    (*pf_gen_max_stream_data_frame) (unsigned char *buf, size_t,
+                                                lsquic_stream_id_t, uint64_t);
+    int
+    (*pf_parse_max_stream_data_frame) (const unsigned char *buf, size_t,
+                                            lsquic_stream_id_t *, uint64_t *);
 };
 
 extern const struct parse_funcs lsquic_parse_funcs_gquic_le;

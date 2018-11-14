@@ -155,7 +155,6 @@ struct lsquic_conn
         const struct enc_session_funcs_iquic   *i;
     }                            cn_esf;
 #define cn_cid cn_cces[0].cce_cid
-#define cn_scid cn_cces[0].cce_cid
     lsquic_cid_t                 cn_dcid;
     STAILQ_ENTRY(lsquic_conn)    cn_next_closed_conn;
     TAILQ_ENTRY(lsquic_conn)     cn_next_ticked;
@@ -171,6 +170,7 @@ struct lsquic_conn
     unsigned short               cn_pack_size;
     unsigned char                cn_cces_mask;  /* Those that are set */
     unsigned char                cn_n_cces; /* Number of CCEs in cn_cces */
+    unsigned char                cn_cur_cce_idx;
     unsigned char                cn_peer_addr[sizeof(struct sockaddr_in6)],
                                  cn_local_addr[sizeof(struct sockaddr_in6)];
 #if LSQUIC_TEST
@@ -188,6 +188,8 @@ struct lsquic_conn
             (lsconn_)->cn_n_cces = 8; (lsconn_)->cn_cces_mask = 1; } while (0)
 #endif
 };
+
+#define CN_SCID(conn) (&(conn)->cn_cces[(conn)->cn_cur_cce_idx].cce_cid)
 
 void
 lsquic_conn_record_sockaddr (lsquic_conn_t *lconn, const struct sockaddr *local,

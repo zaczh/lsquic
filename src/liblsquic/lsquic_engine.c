@@ -1505,3 +1505,33 @@ lsquic_engine_count_attq (lsquic_engine_t *engine, int from_now)
         now += from_now;
     return attq_count_before(engine->attq, now);
 }
+
+
+void
+lsquic_engine_retire_cid (struct lsquic_engine_public *enpub,
+              struct lsquic_conn *conn, unsigned cce_idx, lsquic_time_t now)
+{
+    struct lsquic_engine *const engine = (struct lsquic_engine *) enpub;
+    struct conn_cid_elem *const cce = &conn->cn_cces[cce_idx];
+
+    assert(cce_idx < conn->cn_n_cces);
+    assert(cce_idx != conn->cn_cur_cce_idx);
+
+    if (cce->cce_hash_el.qhe_flags & QHE_HASHED)
+        lsquic_hash_erase(engine->conns_hash, &cce->cce_hash_el);
+
+    lsquic_purga_add(engine->purga, &cce->cce_cid, PUTY_CID_RETIRED, now);
+    conn->cn_cces_mask &= ~(1u << cce_idx);
+    LSQ_DEBUGC("retire CID %"CID_FMT, CID_BITS(&cce->cce_cid));
+}
+
+
+void
+lsquic_engine_ignore_cid (struct lsquic_engine_public *enpub,
+                                                const lsquic_cid_t *cid)
+{
+    struct lsquic_engine *const engine = (struct lsquic_engine *) enpub;
+
+    lsquic_purga_add(engine->purga, cid, PUTY_CID_RETIRED, lsquic_time_now());
+    LSQ_DEBUGC("ignore CID %"CID_FMT, CID_BITS(cid));
+}

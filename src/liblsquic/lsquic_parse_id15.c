@@ -119,7 +119,7 @@ id15_packout_header_size_long (const struct lsquic_conn *lconn,
        + 4 /* Version */
        + 1 /* DCIL/SCIL */
        + lconn->cn_dcid.len
-       + lconn->cn_scid.len
+       + CN_SCID(lconn)->len
        + (header_type == HETY_INITIAL)  /* Token length */
        + 2 /* Always use two bytes to encode payload length */
        + packno_bits2len(packno_bits)
@@ -235,15 +235,15 @@ gen_long_pkt_header (const struct lsquic_conn *lconn,
     dlen = lconn->cn_dcid.len;
     if (dlen)
         dlen -= 3;
-    slen = lconn->cn_scid.len;
+    slen = CN_SCID(lconn)->len;
     if (slen)
         slen -= 3;
     *p++ = (dlen << 4) | slen;
 
     memcpy(p, lconn->cn_dcid.idbuf, lconn->cn_dcid.len);
     p += lconn->cn_dcid.len;
-    memcpy(p, lconn->cn_scid.idbuf, lconn->cn_scid.len);
-    p += lconn->cn_scid.len;
+    memcpy(p, CN_SCID(lconn)->idbuf, CN_SCID(lconn)->len);
+    p +=  CN_SCID(lconn)->len;
 
     if (HETY_INITIAL == packet_out->po_header_type)
         *p++ = 0;   /* Token length */
@@ -318,7 +318,7 @@ id15_packno_info (const struct lsquic_conn *lconn,
                     + 4
                     + 1
                     + lconn->cn_dcid.len
-                    + lconn->cn_scid.len
+                    + CN_SCID(lconn)->len
                     + (packet_out->po_header_type == HETY_INITIAL)
                     + 2;
     *packno_len = packno_bits2len(
@@ -394,7 +394,10 @@ id15_gen_stream_frame (unsigned char *buf, size_t buf_len,
             dlen = 1 << dbits;
         }
         else
+        {
             dlen = 0;
+            size = n_avail;
+        }
         n_avail -= dlen;
 
         CHECK_STREAM_SPACE(1 + olen + slen + dlen +
@@ -408,13 +411,12 @@ id15_gen_stream_frame (unsigned char *buf, size_t buf_len,
         p += olen;
 
         /* Read as much as we can */
-        nr = gsf_read(stream, p + dlen, n_avail, &fin);
+        nr = gsf_read(stream, p + dlen, size, &fin);
         assert(nr != 0);
-
-        /* XXX: better check that `nr' is same as size... */
+        assert(nr <= size);
 
         if (dlen)
-            vint_write(p, size, dbits, dlen);
+            vint_write(p, nr, dbits, dlen);
 
         p += dlen + nr;
     }
@@ -1278,6 +1280,115 @@ id15_parse_new_conn_id (const unsigned char *buf, size_t len, uint64_t *seqno,
 }
 
 
+/* Size of a frame that contains two varints */
+static unsigned
+id15_two_varints_size (uint64_t vals[2])
+{
+    unsigned vbits[2];
+
+    vbits[0] = vint_val2bits(vals[0]);
+    vbits[1] = vint_val2bits(vals[1]);
+    return 1u + (1u << vbits[0]) + (1u << vbits[1]);
+}
+
+
+static int
+id15_gen_two_varints (unsigned char *buf, size_t len,
+                                    unsigned char type, uint64_t vals[2])
+{
+    unsigned vbits[2];
+    unsigned char *p;
+
+    vbits[0] = vint_val2bits(vals[0]);
+    vbits[1] = vint_val2bits(vals[1]);
+
+    if (1u + (1u << vbits[0]) + (1u << vbits[1]) > len)
+        return -1;
+
+    p = buf;
+    *p++ = type;
+    vint_write(p, vals[0], vbits[0], 1 << vbits[0]);
+    p += 1 << vbits[0];
+    vint_write(p, vals[1], vbits[1], 1 << vbits[1]);
+    p += 1 << vbits[1];
+
+    return p - buf;
+}
+
+
+static int
+id15_parse_two_varints (const unsigned char *buf, size_t len, uint64_t *vals[2])
+{
+    const unsigned char *p = buf;
+    const unsigned char *const end = p + len;
+    int s;
+
+    if (len < 2)
+        return -1;
+
+    ++p;    /* Type */
+
+    s = vint_read(p, end, vals[0]);
+    if (s < 0)
+        return s;
+    p += s;
+
+    s = vint_read(p, end, vals[1]);
+    if (s < 0)
+        return s;
+    p += s;
+
+    return p - buf;
+}
+
+
+static int
+id15_parse_stream_blocked_frame (const unsigned char *buf, size_t len,
+                            lsquic_stream_id_t *stream_id, uint64_t *offset)
+{
+    return id15_parse_two_varints(buf, len,
+                                       (uint64_t *[]) { stream_id, offset, });
+}
+
+
+static unsigned
+id15_stream_blocked_frame_size (lsquic_stream_id_t stream_id, uint64_t off)
+{
+    return id15_two_varints_size((uint64_t []) { stream_id, off, });
+}
+
+
+static int
+id15_gen_stream_blocked_frame (unsigned char *buf, size_t len,
+                                    lsquic_stream_id_t stream_id, uint64_t off)
+{
+    return id15_gen_two_varints(buf, len, 0x9, (uint64_t[]){ stream_id, off, });
+}
+
+
+static int
+id15_gen_max_stream_data_frame (unsigned char *buf, size_t len,
+                                    lsquic_stream_id_t stream_id, uint64_t off)
+{
+    return id15_gen_two_varints(buf, len, 0x5, (uint64_t[]){ stream_id, off, });
+}
+
+
+static unsigned
+id15_max_stream_data_frame_size (lsquic_stream_id_t stream_id, uint64_t off)
+{
+    return id15_two_varints_size((uint64_t []) { stream_id, off, });
+}
+
+
+static int
+id15_parse_max_stream_data_frame (const unsigned char *buf, size_t len,
+                                lsquic_stream_id_t *stream_id, uint64_t *off)
+{
+    return id15_parse_two_varints(buf, len, (uint64_t *[]){ stream_id, off, });
+}
+
+
 const struct parse_funcs lsquic_parse_funcs_id15 =
 {
     .pf_gen_reg_pkt_header            =  id15_gen_reg_pkt_header,
@@ -1318,4 +1429,10 @@ const struct parse_funcs lsquic_parse_funcs_id15 =
     .pf_calc_crypto_frame_header_sz   =  id15_calc_crypto_frame_header_sz,
     .pf_parse_max_data                =  id15_parse_max_data,
     .pf_parse_new_conn_id             =  id15_parse_new_conn_id,
+    .pf_gen_stream_blocked_frame      =  id15_gen_stream_blocked_frame,
+    .pf_parse_stream_blocked_frame    =  id15_parse_stream_blocked_frame,
+    .pf_stream_blocked_frame_size     =  id15_stream_blocked_frame_size,
+    .pf_gen_max_stream_data_frame     =  id15_gen_max_stream_data_frame,
+    .pf_parse_max_stream_data_frame   =  id15_parse_max_stream_data_frame,
+    .pf_max_stream_data_frame_size    =  id15_max_stream_data_frame_size,
 };

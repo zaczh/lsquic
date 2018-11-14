@@ -36,31 +36,27 @@ static void
 qdh_hblock_unblocked (void *);
 
 
-static void
-qdh_begin_out (struct qpack_dec_hdl *qdh)
+static int
+qdh_write_decoder (struct qpack_dec_hdl *qdh, const unsigned char *buf,
+                                                                size_t sz)
 {
-    if (0 == lsquic_frab_list_write(&qdh->qdh_fral,
-                                (unsigned char []) { HQUST_QPACK_DEC }, 1))
-        lsquic_stream_wantwrite(qdh->qdh_dec_sm_out, 1);
-    else
-    {
-        LSQ_WARN("could not write to frab list");
-        /* TODO: abort connection */
-    }
-}
-
-
-static void
-qdh_write_decoder (void *stream, void *buf, size_t sz)
-{
-    struct qpack_dec_hdl *const qdh = stream;
     ssize_t nw;
-    int want_already;
 
-    if (!qdh->qdh_dec_sm_out)   /* XXX Make this impossible */
+    if (!(qdh->qdh_dec_sm_out && lsquic_frab_list_empty(&qdh->qdh_fral)))
     {
-        LSQ_WARN("outgoing QPACK decoder stream does not exist");
-        return;
+  write_to_frab:
+        if (0 == lsquic_frab_list_write(&qdh->qdh_fral,
+                                                (unsigned char *) buf, sz))
+        {
+            LSQ_DEBUG("wrote %zu bytes to frab list", sz);
+            lsquic_stream_wantwrite(qdh->qdh_dec_sm_out, 1);
+            return 0;
+        }
+        else
+        {
+            LSQ_INFO("error writing to frab list");
+            return -1;
+        }
     }
 
     nw = lsquic_stream_write(qdh->qdh_dec_sm_out, buf, sz);
@@ -68,27 +64,26 @@ qdh_write_decoder (void *stream, void *buf, size_t sz)
     {
         LSQ_INFO("error writing to outgoing QPACK decoder stream: %s",
                                                         strerror(errno));
-        /* TODO: abort connection */
-        return;
+        return -1;
     }
     LSQ_DEBUG("wrote %zd bytes to outgoing QPACK decoder stream", nw);
 
-    if ((size_t) nw < sz)
+    if ((size_t) nw == sz)
+        return 0;
+
+    buf = buf + nw;
+    sz -= (size_t) nw;
+    goto write_to_frab;
+}
+
+
+static void
+qdh_begin_out (struct qpack_dec_hdl *qdh)
+{
+    if (0 != qdh_write_decoder(qdh, (unsigned char []) { HQUST_QPACK_DEC }, 1))
     {
-        want_already = !lsquic_frab_list_empty(&qdh->qdh_fral);
-        if (0 == lsquic_frab_list_write(&qdh->qdh_fral,
-                        (unsigned char *) buf + nw, sz - (size_t) nw))
-        {
-            LSQ_DEBUG("wrote %zu overflow bytes to frab list",
-                                                    sz - (size_t) nw);
-            if (!want_already)
-                lsquic_stream_wantwrite(qdh->qdh_dec_sm_out, 1);
-        }
-        else
-        {
-            LSQ_INFO("error writing to frab list");
-            /* TODO: abort connection */
-        }
+        LSQ_WARN("%s: could not write to decoder", __func__);
+        /* TODO: abort connection */
     }
 }
 
@@ -101,8 +96,7 @@ lsquic_qdh_init (struct qpack_dec_hdl *qdh, const struct lsquic_conn *conn,
     qdh->qdh_conn = conn;
     lsquic_frab_list_init(&qdh->qdh_fral, 0x400, NULL, NULL, NULL);
     lsqpack_dec_init(&qdh->qdh_decoder, dyn_table_size,
-                        max_risked_streams, qdh_write_decoder, qdh,
-                        qdh_hblock_unblocked);
+                        max_risked_streams, qdh_hblock_unblocked);
     qdh->qdh_flags |= QDH_INITIALIZED;
     qdh->qdh_enpub = enpub;
     if (qdh->qdh_enpub->enp_hsi_if == lsquic_http1x_if)
@@ -153,12 +147,39 @@ static void
 qdh_out_on_write (struct lsquic_stream *stream, lsquic_stream_ctx_t *ctx)
 {
     struct qpack_dec_hdl *const qdh = (void *) ctx;
-    struct lsquic_reader reader = {
+    struct lsquic_reader reader;
+    ssize_t nw;
+    unsigned char buf[LSQPACK_LONGEST_TSS];
+
+    if (lsqpack_dec_tss_pending(&qdh->qdh_decoder))
+    {
+        nw = lsqpack_dec_write_tss(&qdh->qdh_decoder, buf, sizeof(buf));
+        if (nw > 0)
+        {
+            if (0 == qdh_write_decoder(qdh, buf, nw))
+                LSQ_DEBUG("wrote %zd-byte TSS instruction", nw);
+            else
+                goto err;
+        }
+        else if (nw < 0)
+        {
+            LSQ_WARN("could not generate TSS instruction");
+            goto err;
+        }
+    }
+
+    if (lsquic_frab_list_empty(&qdh->qdh_fral))
+    {
+        LSQ_DEBUG("%s: nothing to write", __func__);
+        lsquic_stream_wantwrite(stream, 0);
+        return;
+    }
+
+    reader = (struct lsquic_reader) {
         .lsqr_read  = lsquic_frab_list_read,
         .lsqr_size  = lsquic_frab_list_size,
         .lsqr_ctx   = &qdh->qdh_fral,
     };
-    ssize_t nw;
 
     nw = lsquic_stream_writef(stream, &reader);
     if (nw >= 0)
@@ -170,9 +191,10 @@ qdh_out_on_write (struct lsquic_stream *stream, lsquic_stream_ctx_t *ctx)
     }
     else
     {
-        /* TODO: abort connection */
         LSQ_WARN("cannot write to stream: %s", strerror(errno));
+  err:
         lsquic_stream_wantwrite(stream, 0);
+        /* TODO: abort connection */
     }
 }
 
@@ -237,6 +259,10 @@ qdh_read_decoder_stream (void *ctx, const unsigned char *buf, size_t sz,
         /* TODO: abort connection */
         goto end;
     }
+    if (qdh->qdh_dec_sm_out
+                    && lsqpack_dec_tss_pending(&qdh->qdh_decoder))
+        lsquic_stream_wantwrite(qdh->qdh_dec_sm_out, 1);
+
     LSQ_DEBUG("successfully fed %zu bytes to QPACK decoder", sz);
 
   end:
@@ -367,14 +393,19 @@ qdh_supply_hset_to_stream (struct qpack_dec_hdl *qdh,
 static enum lsqpack_read_header_status
 qdh_header_read_results (struct qpack_dec_hdl *qdh,
         struct lsquic_stream *stream, enum lsqpack_read_header_status rhs,
-        struct lsqpack_header_set *qset)
+        struct lsqpack_header_set *qset, const unsigned char *dec_buf,
+        size_t dec_buf_sz)
 {
     if (rhs == LQRHS_DONE)
     {
         if (qset)
         {
-            if (0 != qdh_supply_hset_to_stream(qdh, stream, qset))
+            if (!(0 == qdh_write_decoder(qdh, dec_buf, dec_buf_sz)
+                    && 0 == qdh_supply_hset_to_stream(qdh, stream, qset)))
                 return LQRHS_ERROR;
+            if (qdh->qdh_dec_sm_out
+                            && lsqpack_dec_tss_pending(&qdh->qdh_decoder))
+                lsquic_stream_wantwrite(qdh->qdh_dec_sm_out, 1);
         }
         else
         {
@@ -393,12 +424,16 @@ lsquic_qdh_header_in_begin (struct qpack_dec_hdl *qdh,
 {
     enum lsqpack_read_header_status rhs;
     struct lsqpack_header_set *qset;
+    size_t dec_buf_sz;
+    unsigned char dec_buf[LSQPACK_LONGEST_HACK];
 
     if (qdh->qdh_flags & QDH_INITIALIZED)
     {
+        dec_buf_sz = sizeof(dec_buf);
         rhs = lsqpack_dec_header_in(&qdh->qdh_decoder, stream, stream->id,
-                                            header_size, buf, bufsz, &qset);
-        return qdh_header_read_results(qdh, stream, rhs, qset);
+                        header_size, buf, bufsz, &qset, dec_buf, &dec_buf_sz);
+        return qdh_header_read_results(qdh, stream, rhs, qset, dec_buf,
+                                                                dec_buf_sz);
     }
     else
     {
@@ -415,12 +450,16 @@ lsquic_qdh_header_in_continue (struct qpack_dec_hdl *qdh,
 {
     enum lsqpack_read_header_status rhs;
     struct lsqpack_header_set *qset;
+    size_t dec_buf_sz;
+    unsigned char dec_buf[LSQPACK_LONGEST_HACK];
 
     if (qdh->qdh_flags & QDH_INITIALIZED)
     {
+        dec_buf_sz = sizeof(dec_buf);
         rhs = lsqpack_dec_header_read(&qdh->qdh_decoder, stream,
-                                                            buf, bufsz, &qset);
-        return qdh_header_read_results(qdh, stream, rhs, qset);
+                                    buf, bufsz, &qset, dec_buf, &dec_buf_sz);
+        return qdh_header_read_results(qdh, stream, rhs, qset, dec_buf,
+                                                                dec_buf_sz);
     }
     else
     {
@@ -434,5 +473,33 @@ void
 lsquic_qdh_unref_stream (struct qpack_dec_hdl *qdh,
                                                 struct lsquic_stream *stream)
 {
-    LSQ_WARN("%s: TODO", __func__);
+    if (0 == lsqpack_dec_unref_stream(&qdh->qdh_decoder, stream))
+        LSQ_DEBUG("unreffed stream %"PRIu64, stream->id);
+    else
+        LSQ_WARN("cannot unref stream %"PRIu64, stream->id);
+}
+
+
+void
+lsquic_qdh_cancel_stream (struct qpack_dec_hdl *qdh,
+                                                struct lsquic_stream *stream)
+{
+    ssize_t nw;
+    unsigned char buf[LSQPACK_LONGEST_CANCEL];
+
+    nw = lsqpack_dec_cancel_stream(&qdh->qdh_decoder, stream, buf, sizeof(buf));
+    if (nw > 0)
+    {
+        if (0 == qdh_write_decoder(qdh, buf, nw))
+            LSQ_DEBUG("cancelled stream %"PRIu64" and wrote %zd-byte Cancel "
+                "Stream instruction to the decoder stream", stream->id, nw);
+    }
+    else if (nw == 0)
+        LSQ_WARN("cannot cancel stream %"PRIu64" -- not found", stream->id);
+    else
+    {
+        LSQ_WARN("cannot cancel stream %"PRIu64" -- not enough buffer space "
+            "to encode Cancel Stream instructin", stream->id);
+        lsquic_qdh_unref_stream(qdh, stream);
+    }
 }

@@ -52,7 +52,7 @@ add_stream_to_spi (struct stream_prio_iter *iter, lsquic_stream_t *stream)
 void
 lsquic_spi_init (struct stream_prio_iter *iter, struct lsquic_stream *first,
         struct lsquic_stream *last, uintptr_t next_ptr_offset,
-        enum stream_flags onlist_mask, const struct lsquic_conn *conn,
+        enum stream_q_flags onlist_mask, const struct lsquic_conn *conn,
         const char *name)
 {
     struct lsquic_stream *stream;
@@ -187,7 +187,7 @@ maybe_evict_prev (struct stream_prio_iter *iter)
 {
     unsigned set, bit;
 
-    if (0 == (iter->spi_prev_stream->stream_flags & iter->spi_onlist_mask))
+    if (0 == (iter->spi_prev_stream->sm_qflags & iter->spi_onlist_mask))
     {
         SPI_DEBUG("evict stream %"PRIu64, iter->spi_prev_stream->id);
         TAILQ_REMOVE(&iter->spi_streams[ iter->spi_prev_prio ],

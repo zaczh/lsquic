@@ -1056,10 +1056,10 @@ static void
 iquic_esfi_assign_scid (const struct lsquic_engine_public *enpub,
                                                     struct lsquic_conn *lconn)
 {
-    generate_cid(&lconn->cn_scid, enpub->enp_settings.es_scid_len);
+    generate_cid(CN_SCID(lconn), enpub->enp_settings.es_scid_len);
     lconn->cn_cces_mask = 1;    /* XXX */
     LSQ_LOG1C(LSQ_LOG_DEBUG, "generated and assigned SCID %"CID_FMT,
-                                                    CID_BITS(&lconn->cn_scid));
+                                                    CID_BITS(CN_SCID(lconn)));
 }
 
 
