@@ -2999,8 +2999,31 @@ static void
 on_setting (void *ctx, uint16_t setting_id, uint64_t value)
 {
     struct ietf_full_conn *const conn = ctx;
-    LSQ_DEBUG("%s: 0x%"PRIX16"=0x%"PRIX64, __func__, setting_id, value);
-    /* TODO */
+
+    switch (setting_id)
+    {
+    case HQSID_QPACK_BLOCKED_STREAMS:
+        LSQ_DEBUG("Peer's SETTINGS_QPACK_BLOCKED_STREAMS=%"PRIu64, value);
+        conn->ifc_peer_hq_settings.qpack_blocked_streams = value;
+        break;
+    case HQSID_NUM_PLACEHOLDERS:
+        LSQ_DEBUG("Peer's SETTINGS_NUM_PLACEHOLDERS=%"PRIu64, value);
+        conn->ifc_peer_hq_settings.num_placeholders = value;
+        break;
+    case HQSID_HEADER_TABLE_SIZE:
+        LSQ_DEBUG("Peer's SETTINGS_HEADER_TABLE_SIZE=%"PRIu64, value);
+        conn->ifc_peer_hq_settings.header_table_size = value;
+        break;
+    case HQSID_MAX_HEADER_LIST_SIZE:
+        LSQ_DEBUG("Peer's SETTINGS_MAX_HEADER_LIST_SIZE=%"PRIu64, value);
+        conn->ifc_peer_hq_settings.max_header_list_size = value;
+        /* TODO: apply it */
+        break;
+    default:
+        LSQ_DEBUG("received unknown SETTING 0x%"PRIX16"=0x%"PRIX64
+                                        "; ignore it", setting_id, value);
+        break;
+    }
 }
 
 

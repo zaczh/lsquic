@@ -95,7 +95,7 @@ lsquic_qdh_init (struct qpack_dec_hdl *qdh, const struct lsquic_conn *conn,
 {
     qdh->qdh_conn = conn;
     lsquic_frab_list_init(&qdh->qdh_fral, 0x400, NULL, NULL, NULL);
-    lsqpack_dec_init(&qdh->qdh_decoder, dyn_table_size,
+    lsqpack_dec_init(&qdh->qdh_decoder, (void *) conn, dyn_table_size,
                         max_risked_streams, qdh_hblock_unblocked);
     qdh->qdh_flags |= QDH_INITIALIZED;
     qdh->qdh_enpub = enpub;
@@ -400,12 +400,18 @@ qdh_header_read_results (struct qpack_dec_hdl *qdh,
     {
         if (qset)
         {
-            if (!(0 == qdh_write_decoder(qdh, dec_buf, dec_buf_sz)
-                    && 0 == qdh_supply_hset_to_stream(qdh, stream, qset)))
+            if (0 != qdh_supply_hset_to_stream(qdh, stream, qset))
                 return LQRHS_ERROR;
-            if (qdh->qdh_dec_sm_out
-                            && lsqpack_dec_tss_pending(&qdh->qdh_decoder))
-                lsquic_stream_wantwrite(qdh->qdh_dec_sm_out, 1);
+            if (qdh->qdh_dec_sm_out)
+            {
+                if (dec_buf_sz
+                    && 0 != qdh_write_decoder(qdh, dec_buf, dec_buf_sz))
+                {
+                    return LQRHS_ERROR;
+                }
+                if (dec_buf_sz || lsqpack_dec_tss_pending(&qdh->qdh_decoder))
+                    lsquic_stream_wantwrite(qdh->qdh_dec_sm_out, 1);
+            }
         }
         else
         {

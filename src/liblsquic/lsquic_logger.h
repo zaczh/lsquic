@@ -77,6 +77,8 @@ enum lsquic_logger_module {
     LSQLM_HCSO_WRITER,
     LSQLM_QENC_HDL,
     LSQLM_QDEC_HDL,
+    LSQLM_QPACK_ENC,
+    LSQLM_QPACK_DEC,
     N_LSQUIC_LOGGER_MODULES
 };
 

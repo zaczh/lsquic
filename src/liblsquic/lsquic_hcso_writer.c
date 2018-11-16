@@ -49,17 +49,16 @@ int
 lsquic_hcso_write_settings (struct hcso_writer *writer,
                         const struct lsquic_engine_settings *settings)
 {
-    unsigned char buf[2 + VINT_MAX_ONE_BYTE];
-    unsigned char *p = buf;
-    unsigned char *const end = p + sizeof(buf);
+    unsigned char *p;
     unsigned bits;
     int was_empty;
+    unsigned char buf[1 /* Frame size */ + /* Frame type */ 1
+        /* There are maximum four settings that need to be written out and
+         * each value can be encoded in maximum 8 bytes:
+         */
+        + 4 * (2 + 8) ];
 
-    if (p + 5 > end)
-        return -1;
-
-    p++;
-
+    p = buf + 1;
     *p++ = HQFT_SETTINGS;
 
     /* Set SETTINGS_NUM_PLACEHOLDERS to 0 */
@@ -68,22 +67,34 @@ lsquic_hcso_write_settings (struct hcso_writer *writer,
 
     if (settings->es_max_header_list_size != HQ_DF_MAX_HEADER_LIST_SIZE)
     {
-        bits = vint_val2bits(settings->es_max_header_list_size);
-        if (p + 2 + (1 << bits) > end)
-            return -1;
-
         /* Write out SETTINGS_MAX_HEADER_LIST_SIZE */
         memcpy(p, (unsigned char []){ 0, HQSID_MAX_HEADER_LIST_SIZE, }, 2);
         p += 2;
+        bits = vint_val2bits(settings->es_max_header_list_size);
         vint_write(p, settings->es_max_header_list_size, bits, 1 << bits);
         p += 1 << bits;
     }
 
-    if ((unsigned) (p - buf) > VINT_MAX_ONE_BYTE)
+    if (settings->es_qpack_dec_max_size != HQ_DF_HEADER_TABLE_SIZE)
     {
-        LSQ_ERROR("SETTINGS frame is larger than %u bytes", VINT_MAX_ONE_BYTE);
-        return -1;
+        /* Write out SETTINGS_HEADER_TABLE_SIZE */
+        memcpy(p, (unsigned char []){ 0, HQSID_HEADER_TABLE_SIZE, }, 2);
+        p += 2;
+        bits = vint_val2bits(settings->es_qpack_dec_max_size);
+        vint_write(p, settings->es_qpack_dec_max_size, bits, 1 << bits);
+        p += 1 << bits;
     }
+
+    if (settings->es_qpack_dec_max_blocked != HQ_DF_QPACK_BLOCKED_STREAMS)
+    {
+        /* Write out SETTINGS_QPACK_BLOCKED_STREAMS */
+        memcpy(p, (unsigned char []){ 0, HQSID_QPACK_BLOCKED_STREAMS, }, 2);
+        p += 2;
+        bits = vint_val2bits(settings->es_qpack_dec_max_size);
+        vint_write(p, settings->es_qpack_dec_max_blocked, bits, 1 << bits);
+        p += 1 << bits;
+    }
+
     *buf = p - buf - 2;
 
     was_empty = lsquic_frab_list_empty(&writer->how_fral);

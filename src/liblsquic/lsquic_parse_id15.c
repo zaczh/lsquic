@@ -1144,6 +1144,7 @@ id15_gen_ack_frame (unsigned char *outbuf, size_t outbuf_sz,
                         addl_ack_blocks > VINT_MAX_ONE_BYTE,
                         1 + (addl_ack_blocks > VINT_MAX_ONE_BYTE));
 
+    *has_missing = addl_ack_blocks > 0;
     *largest_received = maxno;
     return p - (unsigned char *) outbuf;
 

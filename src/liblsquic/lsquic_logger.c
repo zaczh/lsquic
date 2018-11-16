@@ -80,6 +80,8 @@ enum lsq_log_level lsq_log_levels[N_LSQUIC_LOGGER_MODULES] = {
     [LSQLM_HCSO_WRITER] = LSQ_LOG_WARN,
     [LSQLM_QENC_HDL]    = LSQ_LOG_WARN,
     [LSQLM_QDEC_HDL]    = LSQ_LOG_WARN,
+    [LSQLM_QPACK_ENC]    = LSQ_LOG_WARN,
+    [LSQLM_QPACK_DEC]    = LSQ_LOG_WARN,
 };
 
 const char *const lsqlm_to_str[N_LSQUIC_LOGGER_MODULES] = {
@@ -114,6 +116,8 @@ const char *const lsqlm_to_str[N_LSQUIC_LOGGER_MODULES] = {
     [LSQLM_HCSO_WRITER] = "hcso-writer",
     [LSQLM_QENC_HDL]    = "qenc-hdl",
     [LSQLM_QDEC_HDL]    = "qdec-hdl",
+    [LSQLM_QPACK_ENC]    = "qpack-enc",
+    [LSQLM_QPACK_DEC]    = "qpack-dec",
 };
 
 const char *const lsq_loglevel2str[N_LSQUIC_LOG_LEVELS] = {

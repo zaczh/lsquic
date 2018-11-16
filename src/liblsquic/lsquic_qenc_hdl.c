@@ -47,7 +47,7 @@ lsquic_qeh_init (struct qpack_enc_hdl *qeh, const struct lsquic_conn *conn)
     assert(!(qeh->qeh_flags & QEH_INITIALIZED));
     qeh->qeh_conn = conn;
     lsquic_frab_list_init(&qeh->qeh_fral, 0x400, NULL, NULL, NULL);
-    lsqpack_enc_preinit(&qeh->qeh_encoder);
+    lsqpack_enc_preinit(&qeh->qeh_encoder, (void *) conn);
     qeh->qeh_flags |= QEH_INITIALIZED;
     qeh->qeh_max_prefix_size =
                         lsqpack_enc_header_data_prefix_size(&qeh->qeh_encoder);
@@ -75,8 +75,8 @@ lsquic_qeh_settings (struct qpack_enc_hdl *qeh, unsigned max_table_size,
 
     enc_opts = LSQPACK_ENC_OPT_DUP | LSQPACK_ENC_OPT_STAGE_2
              | server ? LSQPACK_ENC_OPT_SERVER : 0;
-    if (0 != lsqpack_enc_init(&qeh->qeh_encoder, max_table_size, dyn_table_size,
-                                                max_risked_streams, enc_opts))
+    if (0 != lsqpack_enc_init(&qeh->qeh_encoder, (void *) qeh->qeh_conn,
+                max_table_size, dyn_table_size, max_risked_streams, enc_opts))
     {
         LSQ_INFO("could not initialize QPACK encoder");
         return -1;
@@ -364,7 +364,8 @@ qeh_write_headers (struct qpack_enc_hdl *qeh, lsquic_stream_id_t stream_id,
     if (lsquic_frab_list_empty(&qeh->qeh_fral))
     {
         LSQ_DEBUG("all %zd bytes of encoder stream written out; header block "
-            "is %zd bytes", total_enc_sz, *headers_sz);
+            "is %zd bytes; estimated compression ratio %.3f", total_enc_sz,
+            *headers_sz, lsqpack_enc_ratio(&qeh->qeh_encoder));
         return QWH_FULL;
     }
     else
@@ -372,8 +373,9 @@ qeh_write_headers (struct qpack_enc_hdl *qeh, lsquic_stream_id_t stream_id,
         *completion_offset = lsquic_qeh_enc_off(qeh)
                                     + lsquic_frab_list_size(&qeh->qeh_fral);
         LSQ_DEBUG("not all %zd bytes of encoder stream written out; %zd bytes "
-            "buffered; header block is %zd bytes", total_enc_sz,
-            lsquic_frab_list_size(&qeh->qeh_fral), *headers_sz);
+            "buffered; header block is %zd bytes; estimated compression ratio "
+            "%.3f", total_enc_sz, lsquic_frab_list_size(&qeh->qeh_fral),
+            *headers_sz, lsqpack_enc_ratio(&qeh->qeh_encoder));
         return QWH_PARTIAL;
     }
 }
