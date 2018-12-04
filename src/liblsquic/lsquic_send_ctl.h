@@ -100,6 +100,9 @@ typedef struct lsquic_send_ctl {
                             n_delayed;
     }                               sc_stats;
 #endif
+    unsigned char                  *sc_token;
+    size_t                          sc_token_sz;
+    unsigned                        sc_retry_count;
 } lsquic_send_ctl_t;
 
 void
@@ -291,5 +294,13 @@ lsquic_send_ctl_pacer_blocked (struct lsquic_send_ctl *);
 
 int
 lsquic_send_ctl_sched_is_blocked (const struct lsquic_send_ctl *);
+
+int
+lsquic_send_ctl_retry (struct lsquic_send_ctl *, const unsigned char *,
+                                                                size_t, int);
+
+int
+lsquic_send_ctl_set_token (struct lsquic_send_ctl *,
+                const unsigned char *token, size_t token_sz);
 
 #endif

@@ -23,14 +23,14 @@
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 #define READ_UINT(varname, varwidth, src, nbytes) do {                      \
     varname = 0;                                                            \
-    memcpy((unsigned char *) &varname + varwidth / 8 - (nbytes), (src),     \
+    memcpy((unsigned char *) &(varname) + varwidth / 8 - (nbytes), (src),   \
                                                                 (nbytes));  \
     varname = bswap_##varwidth(varname);                                    \
 } while (0)
 #else
 #define READ_UINT(varname, varwidth, src, nbytes) do {                      \
     varname = 0;                                                            \
-    memcpy((unsigned char *) &varname + varwidth / 8 - (nbytes), (src),     \
+    memcpy((unsigned char *) &(varname) + varwidth / 8 - (nbytes), (src),   \
                                                                 (nbytes));  \
 } while (0)
 #endif

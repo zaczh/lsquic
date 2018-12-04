@@ -10,6 +10,7 @@
 struct lsquic_conn;
 struct lsquic_engine;
 struct stack_st_X509;
+struct lsquic_hash;
 
 struct lsquic_engine_public {
     struct lsquic_mm                enp_mm;
@@ -23,6 +24,7 @@ struct lsquic_engine_public {
                                    *enp_pmi;
     void                           *enp_pmi_ctx;
     struct lsquic_engine           *enp_engine;
+    struct lsquic_hash             *enp_srst_hash;
     enum {
         ENPUB_PROC  = (1 << 0), /* Being processed by one of the user-facing
                                  * functions.
@@ -49,9 +51,5 @@ lsquic_engine_add_conn_to_attq (struct lsquic_engine_public *enpub,
 void
 lsquic_engine_retire_cid (struct lsquic_engine_public *,
               struct lsquic_conn *, unsigned cce_idx, lsquic_time_t now);
-
-void
-lsquic_engine_ignore_cid (struct lsquic_engine_public *,
-                                                const lsquic_cid_t *cid);
 
 #endif

@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/queue.h>
 #include <sys/types.h>
@@ -24,6 +25,9 @@
 #include "lsquic_byteswap.h"
 #include "lsquic_varint.h"
 #include "lsquic_enc_sess.h"
+#include "lsquic.h"
+#include "lsquic_mm.h"
+#include "lsquic_engine_public.h"
 
 
 static const enum header_type bin_2_header_type[0x100] =
@@ -44,7 +48,7 @@ lsquic_iquic_parse_packet_in_long_begin (struct lsquic_packet_in *packet_in,
     const unsigned char *const end = p + length;
     lsquic_ver_tag_t tag;
     enum header_type header_type;
-    unsigned dcil, scil;
+    unsigned dcil, scil, odcil;
     int verneg, r;
     unsigned char first_byte;
     uint64_t payload_len, token_len;
@@ -174,23 +178,61 @@ lsquic_iquic_parse_packet_in_long_begin (struct lsquic_packet_in *packet_in,
                      */
                     return -1;
                 }
-                /* TODO Just skip token for now */
-                p += r + token_len;
+                p += r;
+                if (token_len)
+                {
+                    if (token_len >=
+                                1ull << (sizeof(packet_in->pi_token_size) * 8))
+                        return -1;
+                    if (p + token_len > end)
+                        return -1;
+                    packet_in->pi_token = p - packet_in->pi_data;
+                    packet_in->pi_token_size = token_len;
+                    p += token_len;
+                }
+                goto read_payload_len;
             }
-            if (p >= end)
-                return -1;
-            r = vint_read(p, end, &payload_len);
-            if (r < 0)
-                return -1;
-            p += r;
-            if (p - packet_in->pi_data + payload_len > length)
-                return -1;
-            length = p - packet_in->pi_data + payload_len;
-            if (end - p < 4)
-                return -1;
-            state->pps_p      = p - r;
-            state->pps_nbytes = r;
-            packet_in->pi_quic_ver = 1;
+            else if (header_type == HETY_RETRY)
+            {
+                if (p >= end)
+                    return -1;
+                odcil = *p++ & 0xF;
+                if (!odcil)
+                    return -1;
+                odcil += 3;
+                if (odcil > MAX_CID_LEN)
+                    return -1;
+                if (p + odcil > end)
+                    return -1;
+                packet_in->pi_odcid_len = odcil;
+                packet_in->pi_odcid = p - packet_in->pi_data;
+                p += odcil;
+                packet_in->pi_token = p - packet_in->pi_data;
+                packet_in->pi_token_size = end - p;
+                p = end;
+                length = end - packet_in->pi_data;
+                state->pps_p      = NULL;
+                state->pps_nbytes = 0;
+                packet_in->pi_quic_ver = 1;
+            }
+            else
+            {
+  read_payload_len:
+                if (p >= end)
+                    return -1;
+                r = vint_read(p, end, &payload_len);
+                if (r < 0)
+                    return -1;
+                p += r;
+                if (p - packet_in->pi_data + payload_len > length)
+                    return -1;
+                length = p - packet_in->pi_data + payload_len;
+                if (end - p < 4)
+                    return -1;
+                state->pps_p      = p - r;
+                state->pps_nbytes = r;
+                packet_in->pi_quic_ver = 1;
+            }
         }
         else
         {

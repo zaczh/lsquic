@@ -19,6 +19,7 @@
 
 #include "lsquic_types.h"
 #include "lsquic_int_types.h"
+#include "lsquic_sizes.h"
 #include "lsquic_packet_common.h"
 #include "lsquic_packet_in.h"
 #include "lsquic_packet_out.h"
@@ -106,8 +107,9 @@ id15_parse_packet_in_finish (lsquic_packet_in_t *packet_in,
 }
 
 
+/* Note: token size is not accounted for */
 static size_t
-id15_packout_header_size_long (const struct lsquic_conn *lconn,
+id15_packout_header_size_long_by_flags (const struct lsquic_conn *lconn,
                 enum header_type header_type, enum packet_out_flags flags)
 {
     size_t sz;
@@ -121,6 +123,32 @@ id15_packout_header_size_long (const struct lsquic_conn *lconn,
        + lconn->cn_dcid.len
        + CN_SCID(lconn)->len
        + (header_type == HETY_INITIAL)  /* Token length */
+       + 2 /* Always use two bytes to encode payload length */
+       + packno_bits2len(packno_bits)
+       ;
+
+    return sz;
+}
+
+
+static size_t
+id15_packout_header_size_long_by_packet (const struct lsquic_conn *lconn,
+                                const struct lsquic_packet_out *packet_out)
+{
+    size_t sz;
+    unsigned token_len; /* Need intermediate value to quiet compiler warning */
+    enum lsquic_packno_bits packno_bits;
+
+    packno_bits = lsquic_packet_out_packno_bits(packet_out);
+
+    sz = 1 /* Type */
+       + 4 /* Version */
+       + 1 /* DCIL/SCIL */
+       + lconn->cn_dcid.len
+       + CN_SCID(lconn)->len
+       + (packet_out->po_header_type == HETY_INITIAL ?
+            (token_len = packet_out->po_token_len,
+                (1 << vint_val2bits(token_len)) + token_len) : 0)
        + 2 /* Always use two bytes to encode payload length */
        + packno_bits2len(packno_bits)
        ;
@@ -147,13 +175,13 @@ id15_packout_header_size_short (const struct lsquic_conn *lconn,
 
 
 static size_t
-id15_packout_header_size (const struct lsquic_conn *lconn,
+id15_packout_max_header_size (const struct lsquic_conn *lconn,
                                 enum packet_out_flags flags)
 {
     if (lconn->cn_flags & LSCONN_HANDSHAKE_DONE)
         return id15_packout_header_size_short(lconn, flags);
     else
-        return id15_packout_header_size_long(lconn, HETY_INITIAL, flags);
+        return id15_packout_header_size_long_by_flags(lconn, HETY_INITIAL, flags);
 }
 
 
@@ -216,10 +244,10 @@ gen_long_pkt_header (const struct lsquic_conn *lconn,
     lsquic_ver_tag_t ver_tag;
     uint8_t dlen, slen;
     unsigned char *p;
+    unsigned token_len;
     size_t need;
 
-    need = id15_packout_header_size_long(lconn, packet_out->po_header_type,
-                                                        packet_out->po_flags);
+    need = id15_packout_header_size_long_by_packet(lconn, packet_out);
     if (need > bufsz)
     {
         errno = EINVAL;
@@ -246,7 +274,14 @@ gen_long_pkt_header (const struct lsquic_conn *lconn,
     p +=  CN_SCID(lconn)->len;
 
     if (HETY_INITIAL == packet_out->po_header_type)
-        *p++ = 0;   /* Token length */
+    {
+        token_len = packet_out->po_token_len;
+        bits = vint_val2bits(token_len);
+        vint_write(p, token_len, bits, 1 << bits);
+        p += 1 << bits;
+        memcpy(p, packet_out->po_token, token_len);
+        p += token_len;
+    }
 
     payload_len = packet_out->po_data_sz
                 + lconn->cn_esf_c->esf_tag_len
@@ -310,6 +345,8 @@ id15_packno_info (const struct lsquic_conn *lconn,
         const struct lsquic_packet_out *packet_out, unsigned *packno_off,
         unsigned *packno_len)
 {
+    unsigned token_len; /* Need intermediate value to quiet compiler warning */
+
     if (packet_out->po_header_type == HETY_NOT_SET)
         *packno_off = 1 +
             (packet_out->po_flags & PO_CONN_ID ? lconn->cn_dcid.len : 0);
@@ -319,7 +356,9 @@ id15_packno_info (const struct lsquic_conn *lconn,
                     + 1
                     + lconn->cn_dcid.len
                     + CN_SCID(lconn)->len
-                    + (packet_out->po_header_type == HETY_INITIAL)
+                    + (packet_out->po_header_type == HETY_INITIAL ?
+                        (token_len = packet_out->po_token_len,
+                            (1 << vint_val2bits(token_len)) + token_len) : 0)
                     + 2;
     *packno_len = packno_bits2len(
         lsquic_packet_out_packno_bits(packet_out));
@@ -336,8 +375,7 @@ id15_packout_size (const struct lsquic_conn *lconn,
                                 && packet_out->po_header_type == HETY_NOT_SET)
         sz = id15_packout_header_size_short(lconn, packet_out->po_flags);
     else
-        sz = id15_packout_header_size_long(lconn, packet_out->po_header_type,
-                                                        packet_out->po_flags);
+        sz = id15_packout_header_size_long_by_packet(lconn, packet_out);
 
     sz += packet_out->po_data_sz;
     sz += lconn->cn_esf_c->esf_tag_len;
@@ -766,17 +804,23 @@ id15_gen_blocked_frame (unsigned char *buf, size_t buf_len,
 
 
 static int
-id15_parse_blocked_frame (const unsigned char *buf, size_t buf_len,
-                                            lsquic_stream_id_t *stream_id_p)
+id15_parse_blocked_frame (const unsigned char *buf, size_t sz, uint64_t *off)
 {
-    assert(0);  /* Not implemented for ID-11 yet */
-    uint32_t stream_id;
-    if (buf_len < GQUIC_BLOCKED_FRAME_SZ)
+    const unsigned char *p = buf;
+    const unsigned char *const end = p + sz;
+    int s;
+
+    if (sz < 2)
         return -1;
 
-    READ_UINT(stream_id, 32, buf + 1, 4);
-    *stream_id_p = stream_id;
-    return GQUIC_BLOCKED_FRAME_SZ;
+    ++p;    /* Type */
+
+    s = vint_read(p, end, off);
+    if (s < 0)
+        return s;
+    p += s;
+
+    return p - buf;
 }
 
 
@@ -846,9 +890,61 @@ id15_parse_rst_frame (const unsigned char *buf, size_t buf_len,
 
 
 static int
+id15_parse_stop_sending_frame (const unsigned char *buf, size_t buf_len,
+                        lsquic_stream_id_t *stream_id, uint16_t *error_code)
+{
+    const unsigned char *p = buf + 1;
+    const unsigned char *const end = buf + buf_len;
+    int r;
+
+    if (end - p < 3)
+        return -1;
+
+    r = vint_read(p, end, stream_id);
+    if (r < 0)
+        return r;
+    p += r;
+
+    if (end - p < 2)
+        return -1;
+
+    READ_UINT(*error_code, 16, p, 2);
+    p += 2;
+
+    return p - buf;
+}
+
+
+static int
+id15_parse_new_token_frame (const unsigned char *buf, size_t buf_len,
+                            const unsigned char **token, size_t *token_size_p)
+{
+    uint64_t token_size;
+    const unsigned char *p = buf + 1;
+    const unsigned char *const end = buf + buf_len;
+    int r;
+
+    if (end - p < 2)
+        return -1;
+
+    r = vint_read(p, end, &token_size);
+    if (r < 0)
+        return r;
+    p += r;
+
+    if (p + token_size > end)
+        return -1;
+    *token = p;
+    p += token_size;
+    *token_size_p = token_size;
+
+    return p - buf;
+}
+
+
+static int
 id15_gen_ping_frame (unsigned char *buf, int buf_len)
 {
-    assert(0);  /* Not implemented for ID-11 yet */
     if (buf_len > 0)
     {
         buf[0] = 0x07;
@@ -1187,7 +1283,8 @@ id15_parse_frame_type (unsigned char byte)
 
 
 static int
-id15_parse_path_chal (const unsigned char *buf, size_t len, uint64_t *chal)
+id15_parse_path_chal_frame (const unsigned char *buf, size_t len,
+                                                            uint64_t *chal)
 {
     if (len > 9)
     {
@@ -1196,6 +1293,14 @@ id15_parse_path_chal (const unsigned char *buf, size_t len, uint64_t *chal)
     }
     else
         return -1;
+}
+
+
+static int
+id15_parse_path_resp_frame (const unsigned char *buf, size_t len,
+                                                            uint64_t *resp)
+{
+    return id15_parse_path_chal_frame(buf, len, resp);
 }
 
 
@@ -1253,7 +1358,7 @@ id15_parse_max_data (const unsigned char *buf, size_t len, uint64_t *val)
 
 static int
 id15_parse_new_conn_id (const unsigned char *buf, size_t len, uint64_t *seqno,
-                                                            lsquic_cid_t *cid)
+                        lsquic_cid_t *cid, const unsigned char **reset_token)
 {
     const unsigned char *p = buf;
     const unsigned char *const end = p + len;
@@ -1271,11 +1376,14 @@ id15_parse_new_conn_id (const unsigned char *buf, size_t len, uint64_t *seqno,
         return s;
     p += s;
 
-    if ((unsigned) (end - p) < cid_len + 16u /* Stateless reset token */)
+    if ((unsigned) (end - p) < cid_len + IQUIC_SRESET_TOKEN_SZ)
         return -1;
     cid->len = cid_len;
     memcpy(cid->idbuf, p, cid_len);
-    p += cid_len + 16;
+    p += cid_len;
+    if (reset_token)
+        *reset_token = p;
+    p += IQUIC_SRESET_TOKEN_SZ;
 
     return p - buf;
 }
@@ -1421,8 +1529,9 @@ const struct parse_funcs lsquic_parse_funcs_id15 =
     .pf_parse_frame_type              =  id15_parse_frame_type,
     .pf_turn_on_fin                   =  id15_turn_on_fin,
     .pf_packout_size                  =  id15_packout_size,
-    .pf_packout_max_header_size       =  id15_packout_header_size,
-    .pf_parse_path_chal_frame         =  id15_parse_path_chal,
+    .pf_packout_max_header_size       =  id15_packout_max_header_size,
+    .pf_parse_path_chal_frame         =  id15_parse_path_chal_frame,
+    .pf_parse_path_resp_frame         =  id15_parse_path_resp_frame,
     .pf_calc_packno_bits              =  id15_calc_packno_bits,
     .pf_packno_info                   =  id15_packno_info,
     .pf_gen_crypto_frame              =  id15_gen_crypto_frame,
@@ -1436,4 +1545,6 @@ const struct parse_funcs lsquic_parse_funcs_id15 =
     .pf_gen_max_stream_data_frame     =  id15_gen_max_stream_data_frame,
     .pf_parse_max_stream_data_frame   =  id15_parse_max_stream_data_frame,
     .pf_max_stream_data_frame_size    =  id15_max_stream_data_frame_size,
+    .pf_parse_stop_sending_frame      =  id15_parse_stop_sending_frame,
+    .pf_parse_new_token_frame         =  id15_parse_new_token_frame,
 };

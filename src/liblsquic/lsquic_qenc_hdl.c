@@ -31,8 +31,14 @@ static void
 qeh_begin_out (struct qpack_enc_hdl *qeh)
 {
     if (0 == lsquic_frab_list_write(&qeh->qeh_fral,
-                                (unsigned char []) { HQUST_QPACK_ENC }, 1))
+                                (unsigned char []) { HQUST_QPACK_ENC }, 1)
+        && (qeh->qeh_tsu_sz == 0
+            || 0 == lsquic_frab_list_write(&qeh->qeh_fral, qeh->qeh_tsu_buf,
+                                                            qeh->qeh_tsu_sz)))
+    {
+        LSQ_DEBUG("wrote %zu bytes to frab list", 1 + qeh->qeh_tsu_sz);
         lsquic_stream_wantwrite(qeh->qeh_enc_sm_out, 1);
+    }
     else
     {
         LSQ_WARN("could not write to frab list");
@@ -51,8 +57,6 @@ lsquic_qeh_init (struct qpack_enc_hdl *qeh, const struct lsquic_conn *conn)
     qeh->qeh_flags |= QEH_INITIALIZED;
     qeh->qeh_max_prefix_size =
                         lsqpack_enc_header_data_prefix_size(&qeh->qeh_encoder);
-    if (qeh->qeh_enc_sm_out)
-        qeh_begin_out(qeh);
     if (qeh->qeh_dec_sm_in)
         lsquic_stream_wantread(qeh->qeh_dec_sm_in, 1);
     LSQ_DEBUG("initialized");
@@ -75,17 +79,22 @@ lsquic_qeh_settings (struct qpack_enc_hdl *qeh, unsigned max_table_size,
 
     enc_opts = LSQPACK_ENC_OPT_DUP | LSQPACK_ENC_OPT_STAGE_2
              | server ? LSQPACK_ENC_OPT_SERVER : 0;
+    qeh->qeh_tsu_sz = sizeof(qeh->qeh_tsu_buf);
     if (0 != lsqpack_enc_init(&qeh->qeh_encoder, (void *) qeh->qeh_conn,
-                max_table_size, dyn_table_size, max_risked_streams, enc_opts))
+                max_table_size, dyn_table_size, max_risked_streams, enc_opts,
+                qeh->qeh_tsu_buf, &qeh->qeh_tsu_sz))
     {
         LSQ_INFO("could not initialize QPACK encoder");
         return -1;
     }
+    LSQ_DEBUG("%zu-byte post-init TSU", qeh->qeh_tsu_sz);
     qeh->qeh_flags |= QEH_HAVE_SETTINGS;
     qeh->qeh_max_prefix_size =
                         lsqpack_enc_header_data_prefix_size(&qeh->qeh_encoder);
     LSQ_DEBUG("have settings: max table size=%u; dyn table size=%u; max risked "
         "streams=%u", max_table_size, dyn_table_size, max_risked_streams);
+    if (qeh->qeh_enc_sm_out)
+        qeh_begin_out(qeh);
     return 0;
 }
 
@@ -107,7 +116,8 @@ qeh_out_on_new (void *stream_if_ctx, struct lsquic_stream *stream)
 {
     struct qpack_enc_hdl *const qeh = stream_if_ctx;
     qeh->qeh_enc_sm_out = stream;
-    if (qeh->qeh_flags & QEH_INITIALIZED)
+    if ((qeh->qeh_flags & (QEH_INITIALIZED|QEH_HAVE_SETTINGS))
+                                    == (QEH_INITIALIZED|QEH_HAVE_SETTINGS))
         qeh_begin_out(qeh);
     else
         qeh->qeh_conn = lsquic_stream_conn(stream);   /* Or NULL deref in log */
@@ -270,7 +280,7 @@ qeh_write_headers (struct qpack_enc_hdl *qeh, lsquic_stream_id_t stream_id,
     enum lsqpack_enc_status st;
     int i, s, write_to_stream;
     enum lsqpack_enc_flags enc_flags;
-    unsigned char enc_buf[ qeh->qeh_encoder.qpe_max_capacity * 2 ];
+    unsigned char enc_buf[ qeh->qeh_encoder.qpe_cur_max_capacity * 2 ];
 
     s = lsqpack_enc_start_header(&qeh->qeh_encoder, stream_id, 0);
     if (s != 0)

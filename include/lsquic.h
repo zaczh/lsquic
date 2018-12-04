@@ -25,7 +25,7 @@ extern "C" {
 
 #define LSQUIC_MAJOR_VERSION 1
 #define LSQUIC_MINOR_VERSION 17
-#define LSQUIC_PATCH_VERSION 2
+#define LSQUIC_PATCH_VERSION 3
 
 /**
  * Engine flags:
@@ -198,6 +198,12 @@ struct lsquic_stream_if {
      * This callback is optional.
      */
     void (*on_hsk_done)(lsquic_conn_t *c, int ok);
+    /**
+     * When server sends a token in NEW_TOKEN frame, this callback is called.
+     * The callback is optional.
+     */
+    void (*on_new_token)(lsquic_conn_t *c, const unsigned char *token,
+                                                        size_t token_size);
 };
 
 /**
@@ -802,7 +808,9 @@ lsquic_conn_t *
 lsquic_engine_connect (lsquic_engine_t *, const struct sockaddr *local_sa,
                        const struct sockaddr *peer_sa,
                        void *peer_ctx, lsquic_conn_ctx_t *conn_ctx,
-                       const char *hostname, unsigned short max_packet_size);
+                       const char *hostname, unsigned short max_packet_size,
+                       /** Resumption token: optional */
+                       const unsigned char *token, size_t token_sz);
 
 /**
  * Pass incoming packet to the QUIC engine.  This function can be called

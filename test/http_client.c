@@ -1017,12 +1017,13 @@ const struct lsquic_stream_if qif_client_if = {
 int
 main (int argc, char **argv)
 {
-    int opt, s;
+    int opt, s, was_empty;
     struct http_client_ctx client_ctx;
     struct stat st;
     struct path_elem *pe;
     struct sport_head sports;
     struct prog prog;
+    const char *token = NULL;
 
     TAILQ_INIT(&sports);
     memset(&client_ctx, 0, sizeof(client_ctx));
@@ -1041,7 +1042,8 @@ main (int argc, char **argv)
 
     prog_init(&prog, LSENG_HTTP, &sports, &http_client_if, &client_ctx);
 
-    while (-1 != (opt = getopt(argc, argv, PROG_OPTS "46Br:R:IKu:EP:M:n:H:p:q:h"
+    while (-1 != (opt = getopt(argc, argv, PROG_OPTS
+                                            "46Br:R:IKu:EP:M:n:H:p:q:t:h"
 #ifndef WIN32
                                                                           "C:"
 #endif
@@ -1114,6 +1116,12 @@ main (int argc, char **argv)
         case 'q':
             client_ctx.qif_file = optarg;
             break;
+        case 't':
+            if (TAILQ_EMPTY(&sports))
+                token = optarg;
+            else
+                sport_set_token(TAILQ_LAST(&sports, sport_head), optarg);
+            break;
 #ifndef WIN32
         case 'C':
             prog.prog_api.ea_verify_cert = verify_server_cert;
@@ -1147,11 +1155,14 @@ main (int argc, char **argv)
         exit(1);
     }
 
+    was_empty = TAILQ_EMPTY(&sports);
     if (0 != prog_prep(&prog))
     {
         LSQ_ERROR("could not prep");
         exit(EXIT_FAILURE);
     }
+    if (was_empty && token)
+        sport_set_token(TAILQ_LAST(&sports, sport_head), token);
 
     if (client_ctx.qif_file)
     {

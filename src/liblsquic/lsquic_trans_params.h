@@ -25,7 +25,6 @@ enum transport_param_id
     TPI_ORIGINAL_CONNECTION_ID            =  13,
 };
 
-#define IQUIC_SRESET_TOKEN_SZ 16
 #define IQUIC_MAX_SUPP_VERS ((2<<7) - 4)/sizeof(uint32_t)
 
 enum trapa_flags

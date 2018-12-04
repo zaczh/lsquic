@@ -182,6 +182,9 @@ struct enc_session_funcs_iquic
     (*esfi_get_peer_transport_params) (enc_session_t *,
                                                 struct transport_params *);
 
+    int
+    (*esfi_reset_dcid) (enc_session_t *, const struct lsquic_cid *);
+
 };
 
 extern

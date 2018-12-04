@@ -65,7 +65,9 @@ typedef struct lsquic_packet_out
                        po_next;
     lsquic_time_t      po_sent;       /* Time sent */
     lsquic_packno_t    po_packno;
-
+    lsquic_packno_t    po_ack2ed;       /* If packet has ACK frame, value of
+                                         * largest acked in it.
+                                         */
     enum quic_ft_bit   po_frame_types;  /* Bitmask of QUIC_FRAME_* */
 
     enum packet_out_flags {
@@ -99,6 +101,7 @@ typedef struct lsquic_packet_out
 #define POPNS_SHIFT 21
         PO_PNS_HSK  = (1 <<21),         /* PNS bits contain the value of the */
         PO_PNS_APP  = (1 <<22),         /*   packet number space. */
+        PO_RETRY    = (1 <<23),         /* Retry packet */
     }                  po_flags;
     unsigned short     po_data_sz;      /* Number of usable bytes in data */
     unsigned short     po_enc_data_sz;  /* Number of usable bytes in data */
@@ -109,11 +112,9 @@ typedef struct lsquic_packet_out
                                          * frames.
                                          */
     unsigned short     po_n_alloc;      /* Total number of bytes allocated in po_data */
+    unsigned short     po_token_len;
     enum header_type   po_header_type:8;
     unsigned char     *po_data;
-    lsquic_packno_t    po_ack2ed;       /* If packet has ACK frame, value of
-                                         * largest acked in it.
-                                         */
 
     /* A lot of packets contain data belonging to only one stream.  Thus,
      * `one' is used first.  If this is not enough, any number of
@@ -132,6 +133,7 @@ typedef struct lsquic_packet_out
 
     lsquic_ver_tag_t   po_ver_tag;      /* Set if PO_VERSION is set */
     unsigned char     *po_nonce;        /* Use to generate header if PO_NONCE is set */
+#define po_token po_nonce
 } lsquic_packet_out_t;
 
 /* This is to make sure these bit names are not used, they are only for
@@ -187,10 +189,13 @@ typedef struct lsquic_packet_out
 #endif
 
 #define lsquic_packet_out_verneg(p) \
-    (((p)->po_flags & (PO_NOENCRYPT|PO_VERNEG)) == (PO_NOENCRYPT|PO_VERNEG))
+    (((p)->po_flags & (PO_NOENCRYPT|PO_VERNEG|PO_RETRY)) == (PO_NOENCRYPT|PO_VERNEG))
 
 #define lsquic_packet_out_pubres(p) \
-    (((p)->po_flags & (PO_NOENCRYPT|PO_VERNEG)) ==  PO_NOENCRYPT           )
+    (((p)->po_flags & (PO_NOENCRYPT|PO_VERNEG|PO_RETRY)) ==  PO_NOENCRYPT           )
+
+#define lsquic_packet_out_retry(p) \
+    (((p)->po_flags & (PO_NOENCRYPT|PO_VERNEG|PO_RETRY)) == (PO_NOENCRYPT|PO_RETRY) )
 
 #define lsquic_packet_out_set_enc_level(p, level) do {                      \
     (p)->po_flags &= ~(3 << POLEV_SHIFT);                                   \

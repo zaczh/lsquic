@@ -205,6 +205,7 @@ sport_destroy (struct service_port *sport)
         (void) CLOSE_SOCKET(sport->fd);
     if (sport->packs_in)
         free_packets_in(sport->packs_in);
+    free(sport->sp_token_buf);
     free(sport);
 }
 
@@ -212,7 +213,7 @@ sport_destroy (struct service_port *sport)
 struct service_port *
 sport_new (const char *optarg, struct prog *prog)
 {
-    struct service_port *const sport = malloc(sizeof(*sport));
+    struct service_port *const sport = calloc(1, sizeof(*sport));
 #if HAVE_REGEX
     regex_t re;
     regmatch_t matches[5];
@@ -1085,6 +1086,11 @@ set_engine_option (struct lsquic_engine_settings *settings,
             settings->es_pace_packets = atoi(val);
             return 0;
         }
+        if (0 == strncmp(name, "support_srej", 12))
+        {
+            settings->es_support_srej = atoi(val);
+            return 0;
+        }
         break;
     case 13:
         if (0 == strncmp(name, "support_tcid0", 13))
@@ -1339,4 +1345,50 @@ destroy_lsquic_reader_ctx (struct reader_ctx *ctx)
 {
     (void) close(ctx->fd);
     free(ctx);
+}
+
+
+int
+sport_set_token (struct service_port *sport, const char *token_str)
+{
+    static const unsigned char c2b[0x100] =
+    {
+        [(int)'0'] = 0,
+        [(int)'1'] = 1,
+        [(int)'2'] = 2,
+        [(int)'3'] = 3,
+        [(int)'4'] = 4,
+        [(int)'5'] = 5,
+        [(int)'6'] = 6,
+        [(int)'7'] = 7,
+        [(int)'8'] = 8,
+        [(int)'9'] = 9,
+        [(int)'A'] = 0xA,
+        [(int)'B'] = 0xB,
+        [(int)'C'] = 0xC,
+        [(int)'D'] = 0xD,
+        [(int)'E'] = 0xE,
+        [(int)'F'] = 0xF,
+        [(int)'a'] = 0xA,
+        [(int)'b'] = 0xB,
+        [(int)'c'] = 0xC,
+        [(int)'d'] = 0xD,
+        [(int)'e'] = 0xE,
+        [(int)'f'] = 0xF,
+    };
+    unsigned char *token;
+    int len, i;
+
+    len = strlen(token_str);
+    token = malloc(len / 2);
+    if (!token)
+        return -1;
+    for (i = 0; i < len / 2; ++i)
+        token[i] = (c2b[ (int) token_str[i * 2] ] << 4)
+                 |  c2b[ (int) token_str[i * 2 + 1] ];
+
+    free(sport->sp_token_buf);
+    sport->sp_token_buf = token;
+    sport->sp_token_sz = len / 2;
+    return 0;
 }

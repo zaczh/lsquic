@@ -26,6 +26,8 @@ struct qpack_enc_hdl
     struct lsquic_stream    *qeh_enc_sm_out;
     struct frab_list         qeh_fral;
     struct lsquic_stream    *qeh_dec_sm_in;
+    size_t                   qeh_tsu_sz;
+    unsigned char            qeh_tsu_buf[LSQPACK_LONGEST_TSU];
 };
 
 void

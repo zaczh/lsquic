@@ -510,6 +510,22 @@ nocopy_di_mem_used (struct data_in *data_in)
 }
 
 
+static uint64_t
+nocopy_di_readable_bytes (struct data_in *data_in, uint64_t read_offset)
+{
+    const struct nocopy_data_in *const ncdi = NCDI_PTR(data_in);
+    const struct stream_frame *frame;
+    uint64_t starting_offset;
+
+    starting_offset = read_offset;
+    TAILQ_FOREACH(frame, &ncdi->ncdi_frames_in, next_frame)
+        if (DF_ROFF(frame) == read_offset)
+            read_offset += DF_END(frame) - DF_ROFF(frame);
+
+    return read_offset - starting_offset;
+}
+
+
 static const struct data_in_iface di_if_nocopy = {
     .di_destroy      = nocopy_di_destroy,
     .di_empty        = nocopy_di_empty,
@@ -517,6 +533,8 @@ static const struct data_in_iface di_if_nocopy = {
     .di_get_frame    = nocopy_di_get_frame,
     .di_insert_frame = nocopy_di_insert_frame,
     .di_mem_used     = nocopy_di_mem_used,
+    .di_readable_bytes
+                     = nocopy_di_readable_bytes,
     .di_switch_impl  = nocopy_di_switch_impl,
 };
 

@@ -356,7 +356,7 @@ lsquic_packet_out_elide_reset_stream_frames (lsquic_packet_out_t *packet_out,
                 /* See what we can do with the stream */
                 srec->sr_frame_types &= ~(1 << QUIC_FRAME_STREAM);
                 if (!srec_taken(srec))
-                    lsquic_stream_acked(srec->sr_stream);
+                    lsquic_stream_acked(srec->sr_stream, 1 << QUIC_FRAME_STREAM);
             }
         }
     }
@@ -428,7 +428,7 @@ lsquic_packet_out_ack_streams (lsquic_packet_out_t *packet_out)
     struct packet_out_srec_iter posi;
     struct stream_rec *srec;
     for (srec = posi_first(&posi, packet_out); srec; srec = posi_next(&posi))
-        lsquic_stream_acked(srec->sr_stream);
+        lsquic_stream_acked(srec->sr_stream, srec->sr_frame_types);
 }
 
 

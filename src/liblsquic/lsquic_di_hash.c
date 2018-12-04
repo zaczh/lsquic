@@ -640,6 +640,21 @@ hash_di_mem_used (struct data_in *data_in)
 }
 
 
+static uint64_t
+hash_di_readable_bytes (struct data_in *data_in, uint64_t read_offset)
+{
+    const struct data_frame *data_frame;
+    uint64_t starting_offset;
+
+    starting_offset = read_offset;
+    while (data_frame = hash_di_get_frame(data_in, read_offset),
+                data_frame && data_frame->df_size - data_frame->df_read_off)
+        read_offset += data_frame->df_size - data_frame->df_read_off;
+
+    return read_offset - starting_offset;
+}
+
+
 static const struct data_in_iface di_if_hash = {
     .di_destroy      = hash_di_destroy,
     .di_empty        = hash_di_empty,
@@ -647,6 +662,8 @@ static const struct data_in_iface di_if_hash = {
     .di_get_frame    = hash_di_get_frame,
     .di_insert_frame = hash_di_insert_frame,
     .di_mem_used     = hash_di_mem_used,
+    .di_readable_bytes
+                     = hash_di_readable_bytes,
     .di_switch_impl  = hash_di_switch_impl,
 };
 

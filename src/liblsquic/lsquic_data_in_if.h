@@ -55,6 +55,9 @@ struct data_in_iface
     size_t
     (*di_mem_used) (struct data_in *);
 
+    /* Return number of bytes readable starting at offset `read_offset' */
+    uint64_t
+    (*di_readable_bytes) (struct data_in *, uint64_t read_offset);
 };
 
 struct data_in

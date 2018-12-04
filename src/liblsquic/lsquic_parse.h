@@ -127,8 +127,13 @@ struct parse_funcs
     int
     (*pf_gen_blocked_frame) (unsigned char *buf, size_t buf_len,
                                                 lsquic_stream_id_t stream_id);
+    /* The third argument is Stream ID for GQUIC and offset for IETF QUIC.
+     * Since both of these are uint64_t, we'll use the same function pointer.
+     * Just have to be a little careful here.
+     */
     int
     (*pf_parse_blocked_frame) (const unsigned char *buf, size_t buf_len,
+        /* TODO: rename third argument when dropping GQUIC */
                                                 lsquic_stream_id_t *stream_id);
     int
     (*pf_gen_rst_frame) (unsigned char *buf, size_t buf_len,
@@ -136,6 +141,9 @@ struct parse_funcs
     int
     (*pf_parse_rst_frame) (const unsigned char *buf, size_t buf_len,
         lsquic_stream_id_t *stream_id, uint64_t *offset, uint32_t *error_code);
+    int
+    (*pf_parse_stop_sending_frame) (const unsigned char *buf, size_t buf_len,
+        lsquic_stream_id_t *stream_id, uint16_t *error_code);
     int
     (*pf_gen_connect_close_frame) (unsigned char *buf, size_t buf_len,
                 uint32_t error_code, const char *reason, int reason_len);
@@ -161,6 +169,9 @@ struct parse_funcs
     int
     (*pf_parse_path_chal_frame) (const unsigned char *buf, size_t,
                                                             uint64_t *chal);
+    int
+    (*pf_parse_path_resp_frame) (const unsigned char *buf, size_t,
+                                                            uint64_t *resp);
 #ifndef NDEBUG    
     /* These float reading and writing functions assume `mem' has at least
      * 2 bytes.
@@ -182,7 +193,10 @@ struct parse_funcs
     (*pf_packout_size) (const struct lsquic_conn *,
                                             const struct lsquic_packet_out *);
 
-    /* This returns the high estimate of the header size. */
+    /* This returns the high estimate of the header size.  Note that it
+     * cannot account for the size of the token in the IETF QUIC Initial
+     * packets as it does not know it.
+     */
     size_t
     (*pf_packout_max_header_size) (const struct lsquic_conn *,
                                             enum packet_out_flags);
@@ -200,7 +214,7 @@ struct parse_funcs
     (*pf_parse_max_data) (const unsigned char *, size_t, uint64_t *);
     int
     (*pf_parse_new_conn_id) (const unsigned char *, size_t, uint64_t *,
-                                                                lsquic_cid_t *);
+                                    lsquic_cid_t *, const unsigned char **);
     unsigned
     (*pf_stream_blocked_frame_size) (lsquic_stream_id_t, uint64_t);
     int
@@ -217,6 +231,9 @@ struct parse_funcs
     int
     (*pf_parse_max_stream_data_frame) (const unsigned char *buf, size_t,
                                             lsquic_stream_id_t *, uint64_t *);
+    int
+    (*pf_parse_new_token_frame) (const unsigned char *buf, size_t,
+                            const unsigned char **token, size_t *token_size);
 };
 
 extern const struct parse_funcs lsquic_parse_funcs_gquic_le;

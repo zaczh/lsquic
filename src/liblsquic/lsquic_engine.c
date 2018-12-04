@@ -28,6 +28,7 @@
 #include "lsquic.h"
 #include "lsquic_types.h"
 #include "lsquic_int_types.h"
+#include "lsquic_sizes.h"
 #include "lsquic_parse_common.h"
 #include "lsquic_parse.h"
 #include "lsquic_packet_in.h"
@@ -273,7 +274,8 @@ lsquic_engine_check_settings (const struct lsquic_engine_settings *settings,
                         "The maximum value of idle timeout is 600 seconds");
         return -1;
     }
-    if (settings->es_scid_len < 4 || settings->es_scid_len > 18)
+    if (!(!(flags & ENG_SERVER) && settings->es_scid_len == 0)
+            && (settings->es_scid_len < 4 || settings->es_scid_len > 18))
     {
         if (err_buf)
             snprintf(err_buf, err_buf_sz, "Source connection ID cannot be %u "
@@ -312,6 +314,8 @@ hash_conns_by_addr (const struct lsquic_engine *engine)
         return 1;
     if ((engine->pub.enp_settings.es_versions & LSQUIC_GQUIC_HEADER_VERSIONS)
                                 && engine->pub.enp_settings.es_support_tcid0)
+        return 1;
+    if (engine->pub.enp_settings.es_scid_len == 0)
         return 1;
     return 0;
 }
@@ -397,6 +401,15 @@ lsquic_engine_new (unsigned flags,
     engine->attq = attq_create();
     eng_hist_init(&engine->history);
     engine->batch_size = INITIAL_OUT_BATCH_SIZE;
+    if (engine->pub.enp_settings.es_honor_prst)
+    {
+        engine->pub.enp_srst_hash = lsquic_hash_create();
+        if (!engine->pub.enp_srst_hash)
+        {
+            lsquic_engine_destroy(engine);
+            return NULL;
+        }
+    }
 
 
     LSQ_INFO("instantiated engine");
@@ -614,6 +627,27 @@ lsquic_engine_add_conn_to_attq (struct lsquic_engine_public *enpub,
 }
 
 
+static struct lsquic_conn *
+find_conn_by_srst (struct lsquic_engine *engine,
+                                    const struct lsquic_packet_in *packet_in)
+{
+    struct lsquic_hash_elem *el;
+    struct lsquic_conn *conn;
+
+    if (packet_in->pi_data_sz < IQUIC_MIN_SRST_SIZE)
+        return NULL;
+
+    el = lsquic_hash_find(engine->pub.enp_srst_hash,
+            packet_in->pi_data + packet_in->pi_data_sz - IQUIC_SRESET_TOKEN_SZ,
+            IQUIC_SRESET_TOKEN_SZ);
+    if (!el)
+        return NULL;
+
+    conn = lsquic_hashelem_getdata(el);
+    return conn;
+}
+
+
 /* Return 0 if packet is being processed by a connections, otherwise return 1 */
 static int
 process_packet_in (lsquic_engine_t *engine, lsquic_packet_in_t *packet_in,
@@ -634,6 +668,22 @@ process_packet_in (lsquic_engine_t *engine, lsquic_packet_in_t *packet_in,
 
     if (!conn)
     {
+        if (engine->pub.enp_settings.es_honor_prst
+                && !(packet_in->pi_flags & PI_GQUIC)
+                && engine->pub.enp_srst_hash
+                && (conn = find_conn_by_srst(engine, packet_in)))
+        {
+            LSQ_DEBUGC("got stateless reset for connection %"CID_FMT,
+                CID_BITS(lsquic_conn_log_cid(conn)));
+            conn->cn_if->ci_stateless_reset(conn);
+            if (!(conn->cn_flags & LSCONN_TICKABLE)
+                && conn->cn_if->ci_is_tickable(conn))
+            {
+                lsquic_mh_insert(&engine->conns_tickable, conn,
+                                                        conn->cn_last_ticked);
+                engine_incref_conn(conn, LSCONN_TICKABLE);
+            }
+        }
         lsquic_mm_put_packet_in(&engine->pub.enp_mm, packet_in);
         return 1;
     }
@@ -690,6 +740,8 @@ lsquic_engine_destroy (lsquic_engine_t *engine)
     assert(0 == lsquic_mh_count(&engine->conns_tickable));
     lsquic_mm_cleanup(&engine->pub.enp_mm);
     free(engine->conns_tickable.mh_elems);
+    if (engine->pub.enp_srst_hash)
+        lsquic_hash_destroy(engine->pub.enp_srst_hash);
     free(engine);
 }
 
@@ -718,9 +770,9 @@ lsquic_conn_t *
 lsquic_engine_connect (lsquic_engine_t *engine, const struct sockaddr *local_sa,
                        const struct sockaddr *peer_sa,
                        void *peer_ctx, lsquic_conn_ctx_t *conn_ctx, 
-                       const char *hostname, unsigned short max_packet_size)
+                       const char *hostname, unsigned short max_packet_size,
+                       const unsigned char *token, size_t token_sz)
 {
-    client_conn_ctor_f ctor;
     lsquic_conn_t *conn;
     unsigned flags;
     int is_ipv4;
@@ -745,11 +797,13 @@ lsquic_engine_connect (lsquic_engine_t *engine, const struct sockaddr *local_sa,
     flags = engine->flags & (ENG_SERVER|ENG_HTTP);
     is_ipv4 = peer_sa->sa_family == AF_INET;
     if (engine->pub.enp_settings.es_versions & LSQUIC_IETF_VERSIONS)
-        ctor = lsquic_ietf_full_conn_client_new;
+        conn = lsquic_ietf_full_conn_client_new(&engine->pub, engine->stream_if,
+                    engine->stream_if_ctx, flags, hostname, max_packet_size,
+                    is_ipv4, token, token_sz);
     else
-        ctor = lsquic_gquic_full_conn_client_new;
-    conn = ctor(&engine->pub, engine->stream_if, engine->stream_if_ctx,
-                flags, hostname, max_packet_size, is_ipv4);
+        conn = lsquic_gquic_full_conn_client_new(&engine->pub,
+                            engine->stream_if, engine->stream_if_ctx, flags,
+                            hostname, max_packet_size, is_ipv4);
     if (!conn)
         goto err;
     ++engine->n_conns;
@@ -1520,18 +1574,8 @@ lsquic_engine_retire_cid (struct lsquic_engine_public *enpub,
     if (cce->cce_hash_el.qhe_flags & QHE_HASHED)
         lsquic_hash_erase(engine->conns_hash, &cce->cce_hash_el);
 
-    lsquic_purga_add(engine->purga, &cce->cce_cid, PUTY_CID_RETIRED, now);
     conn->cn_cces_mask &= ~(1u << cce_idx);
     LSQ_DEBUGC("retire CID %"CID_FMT, CID_BITS(&cce->cce_cid));
 }
 
 
-void
-lsquic_engine_ignore_cid (struct lsquic_engine_public *enpub,
-                                                const lsquic_cid_t *cid)
-{
-    struct lsquic_engine *const engine = (struct lsquic_engine *) enpub;
-
-    lsquic_purga_add(engine->purga, cid, PUTY_CID_RETIRED, lsquic_time_now());
-    LSQ_DEBUGC("ignore CID %"CID_FMT, CID_BITS(cid));
-}

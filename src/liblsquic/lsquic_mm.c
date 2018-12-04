@@ -14,6 +14,7 @@
 
 #include "lsquic.h"
 #include "lsquic_int_types.h"
+#include "lsquic_sizes.h"
 #include "lsquic_malo.h"
 #include "lsquic_hash.h"
 #include "lsquic_conn.h"
@@ -25,6 +26,7 @@
 #include "lsquic_parse.h"
 #include "lsquic_mm.h"
 #include "lsquic_engine_public.h"
+#include "lsquic_full_conn.h"
 
 #define FAIL_NOMEM do { errno = ENOMEM; return NULL; } while (0)
 
@@ -60,6 +62,7 @@ lsquic_mm_init (struct lsquic_mm *mm)
     mm->malo.stream_rec_arr = lsquic_malo_create(sizeof(struct stream_rec_arr));
     mm->malo.packet_in = lsquic_malo_create(sizeof(struct lsquic_packet_in));
     mm->malo.packet_out = lsquic_malo_create(sizeof(struct lsquic_packet_out));
+    mm->malo.dcid_elem = lsquic_malo_create(sizeof(struct dcid_elem));
     TAILQ_INIT(&mm->free_packets_in);
     for (i = 0; i < MM_N_OUT_BUCKETS; ++i)
         SLIST_INIT(&mm->packet_out_bufs[i]);
@@ -86,6 +89,7 @@ lsquic_mm_cleanup (struct lsquic_mm *mm)
     struct sixteen_k_page *skp;
 
     free(mm->acki);
+    lsquic_malo_destroy(mm->malo.dcid_elem);
     lsquic_malo_destroy(mm->malo.packet_in);
     lsquic_malo_destroy(mm->malo.packet_out);
     lsquic_malo_destroy(mm->malo.stream_frame);

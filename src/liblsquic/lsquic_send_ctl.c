@@ -965,6 +965,7 @@ lsquic_send_ctl_cleanup (lsquic_send_ctl_t *ctl)
         ctl->sc_stats.n_total_sent, ctl->sc_stats.n_resent,
         ctl->sc_stats.n_delayed);
 #endif
+    free(ctl->sc_token);
 }
 
 
@@ -1200,7 +1201,8 @@ lsquic_send_ctl_next_packet_to_send (lsquic_send_ctl_t *ctl)
     }
 
     if ((packet_out->po_flags & PO_HELLO)
-                        && packet_out->po_n_alloc > packet_out->po_data_sz)
+                        && packet_out->po_n_alloc > packet_out->po_data_sz
+                        && !(packet_out->po_frame_types & QUIC_FTBIT_PADDING))
         lsquic_packet_out_zero_pad(packet_out);
 
     return packet_out;
@@ -1242,6 +1244,27 @@ lsquic_send_ctl_have_outgoing_retx_frames (const lsquic_send_ctl_t *ctl)
 }
 
 
+static void
+send_ctl_set_packet_out_token (const struct lsquic_send_ctl *ctl,
+                                        struct lsquic_packet_out *packet_out)
+{
+    unsigned char *token;
+
+    token = malloc(ctl->sc_token_sz);
+    if (!token)
+    {
+        LSQ_WARN("malloc failed: cannot set initial token");
+        return;
+    }
+
+    memcpy(token, ctl->sc_token, ctl->sc_token_sz);
+    packet_out->po_token = token;
+    packet_out->po_token_len = ctl->sc_token_sz;
+    packet_out->po_flags |= PO_NONCE;
+    LSQ_DEBUG("set initial token on packet");
+}
+
+
 static lsquic_packet_out_t *
 send_ctl_allocate_packet (lsquic_send_ctl_t *ctl, enum lsquic_packno_bits bits,
                                 unsigned need_at_least, enum packnum_space pns)
@@ -1265,6 +1288,9 @@ send_ctl_allocate_packet (lsquic_send_ctl_t *ctl, enum lsquic_packno_bits bits,
         send_ctl_destroy_packet(ctl, packet_out);
         return NULL;
     }
+
+    if (UNLIKELY(pns == PNS_INIT && ctl->sc_token))
+        send_ctl_set_packet_out_token(ctl, packet_out);
 
     lsquic_packet_out_set_pns(packet_out, pns);
     return packet_out;
@@ -2042,4 +2068,80 @@ lsquic_send_ctl_mem_used (const struct lsquic_send_ctl *ctl)
             size += lsquic_packet_out_mem_used(packet_out);
 
     return size;
+}
+
+
+int
+lsquic_send_ctl_retry (struct lsquic_send_ctl *ctl,
+                const unsigned char *token, size_t token_sz, int cidlen_diff)
+{
+    struct lsquic_packet_out *packet_out;
+
+    if (token_sz >= 1ull << (sizeof(packet_out->po_token_len) * 8))
+    {
+        LSQ_WARN("token size %zu is too long", token_sz);
+        return -1;
+    }
+
+    send_ctl_expire(ctl, PNS_INIT, EXFI_ALL);
+    packet_out = TAILQ_FIRST(&ctl->sc_lost_packets);
+    if (!(packet_out && HETY_INITIAL == packet_out->po_header_type))
+    {
+        LSQ_INFO("cannot find initial packet to add token to");
+        return -1;
+    }
+
+    ++ctl->sc_retry_count;
+    if (ctl->sc_retry_count > 3)
+    {
+        LSQ_INFO("failing connection after %u retries", ctl->sc_retry_count);
+        return -1;
+    }
+
+    if (0 != lsquic_send_ctl_set_token(ctl, token, token_sz))
+        return -1;
+
+    if (packet_out->po_nonce)
+        free(packet_out->po_nonce);
+
+    packet_out->po_nonce = malloc(token_sz);
+    if (!packet_out->po_nonce)
+    {
+        LSQ_WARN("%s: malloc failed", __func__);
+        return -1;
+    }
+    memcpy(packet_out->po_nonce, token, token_sz);
+    packet_out->po_flags |= PO_NONCE;
+    packet_out->po_token_len = token_sz;
+    packet_out->po_data_sz -= token_sz;
+    if (cidlen_diff > 0)
+        packet_out->po_data_sz += cidlen_diff;
+    else if (cidlen_diff < 0)
+        packet_out->po_data_sz -= -cidlen_diff;
+    return 0;
+}
+
+
+int
+lsquic_send_ctl_set_token (struct lsquic_send_ctl *ctl,
+                const unsigned char *token, size_t token_sz)
+{
+    unsigned char *copy;
+
+    if (token_sz > 1 <<
+                (sizeof(((struct lsquic_packet_out *)0)->po_token_len) * 8))
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    copy = malloc(token_sz);
+    if (!copy)
+        return -1;
+    memcpy(copy, token, token_sz);
+    free(ctl->sc_token);
+    ctl->sc_token = copy;
+    ctl->sc_token_sz = token_sz;
+    LSQ_DEBUG("set token");
+    return 0;
 }

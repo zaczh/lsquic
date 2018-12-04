@@ -133,6 +133,9 @@ struct conn_iface
     void
     (*ci_close) (struct lsquic_conn *);
 
+    void
+    (*ci_stateless_reset) (struct lsquic_conn *);
+
 };
 
 #define LSCONN_CCE_BITS 3
@@ -140,7 +143,7 @@ struct conn_iface
 
 struct conn_cid_elem
 {
-    struct lsquic_hash_elem     cce_hash_el;
+    struct lsquic_hash_elem     cce_hash_el;    /* Must be first element */
     lsquic_cid_t                cce_cid;
 };
 

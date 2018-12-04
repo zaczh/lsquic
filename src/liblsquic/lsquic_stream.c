@@ -180,6 +180,7 @@ enum stream_history_event
     SHE_SHUTDOWN_READ      =  'R',
     SHE_RST_IN             =  's',
     SHE_RST_OUT            =  't',
+    SHE_RST_ACKED          =  'T',
     SHE_FLUSH              =  'u',
     SHE_USER_WRITE_DATA    =  'w',
     SHE_SHUTDOWN_WRITE     =  'W',
@@ -784,6 +785,7 @@ lsquic_stream_frame_in (lsquic_stream_t *stream, stream_frame_t *frame)
         {
             SM_HISTORY_APPEND(stream, SHE_FIN_IN);
             stream->stream_flags |= STREAM_FIN_RECVD;
+            stream->sm_fin_off = DF_END(frame);
             maybe_finish_stream(stream);
         }
         if ((stream->stream_flags & STREAM_AUTOSWITCH) &&
@@ -908,6 +910,14 @@ lsquic_stream_rst_in (lsquic_stream_t *stream, uint64_t offset,
 }
 
 
+void
+lsquic_stream_stop_sending_in (struct lsquic_stream *stream,
+                                                        uint16_t error_code)
+{
+    LSQ_WARN("%s: do something", __func__); /* TODO */
+}
+
+
 uint64_t
 lsquic_stream_fc_recv_off (lsquic_stream_t *stream)
 {
@@ -958,6 +968,7 @@ lsquic_stream_blocked_frame_sent (lsquic_stream_t *stream)
     assert(stream->sm_qflags & SMQF_SEND_BLOCKED);
     SM_HISTORY_APPEND(stream, SHE_BLOCKED_OUT);
     stream->sm_qflags &= ~SMQF_SEND_BLOCKED;
+    stream->stream_flags |= STREAM_BLOCKED_SENT;
     if (!(stream->sm_qflags & SMQF_SENDING_FLAGS))
         TAILQ_REMOVE(&stream->conn_pub->sending_streams, stream, next_send_stream);
 }
@@ -1176,6 +1187,8 @@ lsquic_stream_readf (struct lsquic_stream *stream,
 
     if (lsquic_stream_is_reset(stream))
     {
+        if (stream->stream_flags & STREAM_RST_RECVD)
+            stream->stream_flags |= STREAM_RST_READ;
         errno = ECONNRESET;
         return -1;
     }
@@ -3087,11 +3100,17 @@ __attribute__((weak))
 #endif
 #endif
 void
-lsquic_stream_acked (lsquic_stream_t *stream)
+lsquic_stream_acked (struct lsquic_stream *stream, enum quic_ft_bit frame_types)
 {
     assert(stream->n_unacked);
     --stream->n_unacked;
     LSQ_DEBUG("ACKed; n_unacked: %u", stream->n_unacked);
+    if (frame_types & QUIC_FTBIT_RST_STREAM)
+    {
+        SM_HISTORY_APPEND(stream, SHE_RST_ACKED);
+        LSQ_DEBUG("RESET that we sent has been acked by peer");
+        stream->stream_flags |= STREAM_RST_ACKED;
+    }
     if (0 == stream->n_unacked)
         maybe_finish_stream(stream);
 }
@@ -3142,7 +3161,11 @@ lsquic_stream_uh_in (lsquic_stream_t *stream, struct uncompressed_headers *uh)
         LSQ_DEBUG("received uncompressed headers");
         stream->stream_flags |= STREAM_HAVE_UH;
         if (uh->uh_flags & UH_FIN)
+        {
+            /* IETF QUIC does not set UH_FIN: */
+            assert(!(stream->stream_flags & STREAM_IETF));
             stream->stream_flags |= STREAM_FIN_RECVD|STREAM_HEAD_IN_FIN;
+        }
         stream->uh = uh;
         if (uh->uh_oth_stream_id == 0)
         {
@@ -3588,4 +3611,89 @@ struct qpack_dec_hdl *
 lsquic_stream_get_qdh (const struct lsquic_stream *stream)
 {
     return stream->conn_pub->u.ietf.qdh;
+}
+
+
+/* These are IETF QUIC states */
+enum stream_state_sending
+lsquic_stream_sending_state (const struct lsquic_stream *stream)
+{
+    if (0 == (stream->stream_flags & STREAM_RST_SENT))
+    {
+        if (stream->stream_flags & STREAM_FIN_SENT)
+        {
+            if (stream->n_unacked)
+                return SSS_DATA_SENT;
+            else
+                return SSS_DATA_RECVD;
+        }
+        else
+        {
+            if (stream->tosend_off
+                            || (stream->stream_flags & STREAM_BLOCKED_SENT))
+                return SSS_SEND;
+            else
+                return SSS_READY;
+        }
+    }
+    else if (stream->stream_flags & STREAM_RST_ACKED)
+        return SSS_RESET_RECVD;
+    else
+        return SSS_RESET_SENT;
+}
+
+
+const char *const lsquic_sss2str[] =
+{
+    [SSS_READY]        =  "Ready",
+    [SSS_SEND]         =  "Send",
+    [SSS_DATA_SENT]    =  "Data Sent",
+    [SSS_RESET_SENT]   =  "Reset Sent",
+    [SSS_DATA_RECVD]   =  "Data Recvd",
+    [SSS_RESET_RECVD]  =  "Reset Recvd",
+};
+
+
+const char *const lsquic_ssr2str[] =
+{
+    [SSR_RECV]         =  "Recv",
+    [SSR_SIZE_KNOWN]   =  "Size Known",
+    [SSR_DATA_RECVD]   =  "Data Recvd",
+    [SSR_RESET_RECVD]  =  "Reset Recvd",
+    [SSR_DATA_READ]    =  "Data Read",
+    [SSR_RESET_READ]   =  "Reset Read",
+};
+
+
+/* These are IETF QUIC states */
+enum stream_state_receiving
+lsquic_stream_receiving_state (struct lsquic_stream *stream)
+{
+    uint64_t n_bytes;
+
+    if (0 == (stream->stream_flags & STREAM_RST_RECVD))
+    {
+        if (0 == (stream->stream_flags & STREAM_FIN_RECVD))
+            return SSR_RECV;
+        if (stream->stream_flags & STREAM_FIN_REACHED)
+            return SSR_DATA_READ;
+        if (0 == (stream->stream_flags & STREAM_DATA_RECVD))
+        {
+            n_bytes = stream->data_in->di_if->di_readable_bytes(
+                                    stream->data_in, stream->read_offset);
+            if (stream->read_offset + n_bytes == stream->sm_fin_off)
+            {
+                stream->stream_flags |= STREAM_DATA_RECVD;
+                return SSR_DATA_RECVD;
+            }
+            else
+                return SSR_SIZE_KNOWN;
+        }
+        else
+            return SSR_DATA_RECVD;
+    }
+    else if (stream->stream_flags & STREAM_RST_READ)
+        return SSR_RESET_READ;
+    else
+        return SSR_RESET_RECVD;
 }

@@ -24,7 +24,9 @@
 #include "lsquic_frame_reader.h"
 #include "lsquic_enc_sess.h"
 #include "lsquic_ev_log.h"
+#include "lsquic_sizes.h"
 #include "lsquic_trans_params.h"
+#include "lsquic_util.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_EVENT
 #include "lsquic_logger.h"
@@ -146,6 +148,15 @@ lsquic_ev_log_rst_stream_frame_in (const lsquic_cid_t *cid,
 
 
 void
+lsquic_ev_log_stop_sending_frame_in (const lsquic_cid_t *cid,
+                        lsquic_stream_id_t stream_id, uint16_t error_code)
+{
+    LCID("STOP_SENDING frame in: error code %"PRIu16", stream %"PRIu64,
+                                                     error_code, stream_id);
+}
+
+
+void
 lsquic_ev_log_padding_frame_in (const lsquic_cid_t *cid, size_t len)
 {
     LCID("PADDING frame in of %zd bytes", len);
@@ -179,6 +190,8 @@ lsquic_ev_log_packet_sent (const lsquic_cid_t *cid,
     if (lsquic_packet_out_verneg(packet_out))
         LCID("sent version negotiation packet, size %hu",
                                                     packet_out->po_data_sz);
+    else if (lsquic_packet_out_retry(packet_out))
+        LCID("sent stateless retry packet, size %hu", packet_out->po_data_sz);
     else if (lsquic_packet_out_pubres(packet_out))
         LCID("sent public reset packet, size %hu", packet_out->po_data_sz);
     else if (packet_out->po_flags & PO_GQUIC)
@@ -308,6 +321,33 @@ lsquic_ev_log_generated_ack_frame (const lsquic_cid_t *cid,
     if ((buf = acki2str(&acki, &sz)))
     {
         LCID("generated ACK frame: %.*s", (int) sz, buf);
+        free(buf);
+    }
+}
+
+
+void
+lsquic_ev_log_generated_new_token_frame (const lsquic_cid_t *cid,
+                const struct parse_funcs *pf, const unsigned char *frame_buf,
+                size_t frame_buf_sz)
+{
+    const unsigned char *token;
+    size_t sz;
+    char *buf;
+    int len;
+
+    len = pf->pf_parse_new_token_frame(frame_buf, frame_buf_sz, &token, &sz);
+    if (len < 0)
+    {
+        LSQ_LOG2(LSQ_LOG_WARN, "cannot parse NEW_TOKEN frame");
+        return;
+    }
+
+    buf = malloc(sz * 2 + 1);
+    if (buf)
+    {
+        lsquic_hexstr(token, sz, buf, sz * 2 + 1);
+        LCID("generated NEW_TOKEN frame: %s", buf);
         free(buf);
     }
 }

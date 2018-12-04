@@ -11,9 +11,12 @@
 #include <string.h>
 
 #include "lsquic_byteswap.h"
+#include "lsquic_int_types.h"
 #include "lsquic_types.h"
 #include "lsquic_version.h"
+#include "lsquic_sizes.h"
 #include "lsquic_trans_params.h"
+#include "lsquic_util.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_TRAPA
 #include "lsquic_logger.h"
@@ -323,6 +326,7 @@ lsquic_tp_to_str (const struct transport_params *params, char *buf, size_t sz)
 {
     char *const end = buf + sz;
     int nw;
+    char tok_str[sizeof(params->tp_stateless_reset_token) * 2 + 1];
 
 #define SEMICOLON "; "
 #define WRITE_ONE_PARAM(name, fmt) do {  \
@@ -345,6 +349,13 @@ lsquic_tp_to_str (const struct transport_params *params, char *buf, size_t sz)
 #undef SEMICOLON
 #define SEMICOLON ""
     WRITE_ONE_PARAM(max_ack_delay, "%"PRIu8);
+    if (params->tp_flags & TPI_STATELESS_RESET_TOKEN)
+    {
+        lsquic_hexstr(params->tp_stateless_reset_token,
+            sizeof(params->tp_stateless_reset_token), tok_str, sizeof(tok_str));
+        nw = snprintf(buf, end - buf, "; stateless_reset_token: %s", tok_str);
+        buf += nw;
+    }
 
 #undef SEMICOLON
 #undef WRITE_ONE_PARAM

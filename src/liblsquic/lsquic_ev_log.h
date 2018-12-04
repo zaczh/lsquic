@@ -117,6 +117,15 @@ lsquic_ev_log_rst_stream_frame_in (const lsquic_cid_t *, lsquic_stream_id_t,
 } while (0)
 
 void
+lsquic_ev_log_stop_sending_frame_in (const lsquic_cid_t *,lsquic_stream_id_t,
+                                                        uint16_t error_code);
+
+#define EV_LOG_STOP_SENDING_FRAME_IN(...) do {                              \
+    if (LSQ_LOG_ENABLED_EXT(LSQ_LOG_DEBUG, LSQLM_EVENT))                    \
+        lsquic_ev_log_stop_sending_frame_in(__VA_ARGS__);                   \
+} while (0)
+
+void
 lsquic_ev_log_padding_frame_in (const lsquic_cid_t *, size_t len);
 
 #define EV_LOG_PADDING_FRAME_IN(...) do {                                   \
@@ -200,6 +209,15 @@ lsquic_ev_log_generated_ack_frame (const lsquic_cid_t *,
 #define EV_LOG_GENERATED_ACK_FRAME(...) do {                                \
     if (LSQ_LOG_ENABLED_EXT(LSQ_LOG_DEBUG, LSQLM_EVENT))                    \
         lsquic_ev_log_generated_ack_frame(__VA_ARGS__);                     \
+} while (0)
+
+void
+lsquic_ev_log_generated_new_token_frame (const lsquic_cid_t *,
+                const struct parse_funcs *, const unsigned char *, size_t len);
+
+#define EV_LOG_GENERATED_NEW_TOKEN_FRAME(...) do {                          \
+    if (LSQ_LOG_ENABLED_EXT(LSQ_LOG_DEBUG, LSQLM_EVENT))                    \
+        lsquic_ev_log_generated_new_token_frame(__VA_ARGS__);               \
 } while (0)
 
 void

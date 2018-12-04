@@ -369,10 +369,6 @@ qdh_supply_hset_to_stream (struct qpack_dec_hdl *qdh,
     uh->uh_oth_stream_id = 0;
     uh->uh_weight = 0;
     uh->uh_exclusive = -1;
-    /* TODO: determine FIN
-    if (fr->fr_state.header.hfh_flags & HFHF_END_STREAM)
-        uh->uh_flags    |= UH_FIN;
-        */
     if (hset_if == lsquic_http1x_if)
         uh->uh_flags    |= UH_H1H;
     uh->uh_hset = hset;

@@ -19,6 +19,7 @@
 #include "lsquic_hkdf.h"
 #include "lsquic.h"
 #include "lsquic_int_types.h"
+#include "lsquic_sizes.h"
 #include "lsquic_hash.h"
 #include "lsquic_conn.h"
 #include "lsquic_enc_sess.h"
@@ -972,7 +973,15 @@ iquic_esf_decrypt_packet (enc_session_t *enc_session_p,
      */
     sample_off = packet_in->pi_header_sz + 4;
     if (sample_off + IQUIC_TAG_LEN > packet_in->pi_data_sz)
+    {
+        if (packet_in->pi_data_sz < IQUIC_TAG_LEN)
+        {
+            LSQ_INFO("packet data is too short: %hu bytes",
+                                                    packet_in->pi_data_sz);
+            return -1;
+        }
         sample_off = packet_in->pi_data_sz - IQUIC_TAG_LEN;
+    }
     packet_in->pi_packno =
     packno = pair->ykp_decrypt_pn(enc_sess, crypto_ctx, pair,
         packet_in->pi_data + sample_off,
@@ -1056,10 +1065,28 @@ static void
 iquic_esfi_assign_scid (const struct lsquic_engine_public *enpub,
                                                     struct lsquic_conn *lconn)
 {
-    generate_cid(CN_SCID(lconn), enpub->enp_settings.es_scid_len);
+    if (enpub->enp_settings.es_scid_len)
+        generate_cid(CN_SCID(lconn), enpub->enp_settings.es_scid_len);
     lconn->cn_cces_mask = 1;    /* XXX */
     LSQ_LOG1C(LSQ_LOG_DEBUG, "generated and assigned SCID %"CID_FMT,
                                                     CID_BITS(CN_SCID(lconn)));
+}
+
+
+int
+iquic_esfi_reset_dcid (enc_session_t *enc_session_p, const lsquic_cid_t *dcid)
+{
+    struct enc_sess_iquic *const enc_sess = enc_session_p;
+
+    enc_sess->esi_conn->cn_dcid = *dcid;
+    /* TODO: free previous handshake keys */
+    if (0 == setup_handshake_keys(enc_sess, dcid))
+    {
+        LSQ_INFOC("reset DCID to %"CID_FMT, CID_BITS(dcid));
+        return 0;
+    }
+    else
+        return -1;
 }
 
 
@@ -1072,6 +1099,7 @@ const struct enc_session_funcs_iquic lsquic_enc_session_iquic_id15 =
     .esfi_get_ssl        = iquic_esfi_get_ssl,
     .esfi_get_peer_transport_params
                          = iquic_esfi_get_peer_transport_params,
+    .esfi_reset_dcid     = iquic_esfi_reset_dcid,
 };
 
 

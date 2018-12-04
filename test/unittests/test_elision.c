@@ -78,7 +78,7 @@ lsquic_stream_tosend_sz (const lsquic_stream_t *stream)
 
 
 void
-lsquic_stream_acked (lsquic_stream_t *stream)
+lsquic_stream_acked (lsquic_stream_t *stream, enum quic_ft_bit frame_types)
 {
     --stream->n_unacked;
 }

@@ -46,6 +46,7 @@
 #include "lsquic_qenc_hdl.h"
 #include "lsquic_varint.h"
 #include "lsquic_hq.h"
+#include "lsquic_data_in_if.h"
 
 static const struct parse_funcs *g_pf = select_pf_by_ver(LSQVER_035);
 
@@ -520,7 +521,8 @@ test_loc_FIN_rem_FIN (struct test_objs *tobjs)
     char buf_out[0x100];
     unsigned char buf[0x100];
     ssize_t n;
-    int s, fin;;
+    int s, fin;
+    enum stream_state_sending sss;
 
     init_buf(buf_out, sizeof(buf_out));
 
@@ -551,6 +553,8 @@ test_loc_FIN_rem_FIN (struct test_objs *tobjs)
                                                 sizeof(buf), 100, &fin, 0);
     assert(0 == n);
     assert(fin);
+    sss = lsquic_stream_sending_state(stream);
+    assert(SSS_DATA_SENT == sss);
 
     /* Pretend we sent out this packet as well: */
     packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
@@ -579,6 +583,8 @@ test_loc_FIN_rem_FIN (struct test_objs *tobjs)
     ack_packet(&tobjs->send_ctl, 1);
     ack_packet(&tobjs->send_ctl, 2);
     assert((stream->sm_qflags & (SMQF_SERVICE_FLAGS)) == (SMQF_CALL_ONCLOSE|SMQF_FREE_STREAM));
+    sss = lsquic_stream_sending_state(stream);
+    assert(SSS_DATA_RECVD == sss);
 
     lsquic_stream_destroy(stream);
     assert(TAILQ_EMPTY(&tobjs->conn_pub.service_streams));
@@ -891,6 +897,7 @@ test_loc_RST_rem_FIN (struct test_objs *tobjs)
     unsigned char buf[0x100];
     size_t n;
     int s, fin;
+    enum stream_state_sending sss;
 
     init_buf(buf_out, sizeof(buf_out));
 
@@ -916,10 +923,15 @@ test_loc_RST_rem_FIN (struct test_objs *tobjs)
     assert(1 == stream->n_unacked);
     ack_packet(&tobjs->send_ctl, 1);
     assert(0 == stream->n_unacked);
+    sss = lsquic_stream_sending_state(stream);
+    assert(SSS_SEND == sss);
 
     lsquic_stream_reset(stream, 0);
+    ++stream->n_unacked;    /* Fake sending of packet with RST_STREAM */
     assert(!TAILQ_EMPTY(&tobjs->conn_pub.sending_streams));
     assert((stream->sm_qflags & SMQF_SENDING_FLAGS) == SMQF_SEND_RST);
+    sss = lsquic_stream_sending_state(stream);
+    assert(SSS_SEND == sss);    /* Reset hasn't been packetized yet */
 
     s = lsquic_stream_frame_in(stream, new_frame_in(tobjs, 0, 90, 1));
     assert(s == 0);
@@ -927,6 +939,15 @@ test_loc_RST_rem_FIN (struct test_objs *tobjs)
     assert((stream->sm_qflags & SMQF_SERVICE_FLAGS) == SMQF_CALL_ONCLOSE);
 
     lsquic_stream_rst_frame_sent(stream);
+    sss = lsquic_stream_sending_state(stream);
+    assert(SSS_RESET_SENT == sss);
+
+    sss = lsquic_stream_sending_state(stream);
+    assert(SSS_RESET_SENT == sss);
+    lsquic_stream_acked(stream, QUIC_FTBIT_RST_STREAM); /* Fake ack of RST_STREAM packet */
+    sss = lsquic_stream_sending_state(stream);
+    assert(SSS_RESET_RECVD == sss);
+
     lsquic_stream_call_on_close(stream);
 
     assert(TAILQ_EMPTY(&tobjs->conn_pub.sending_streams));
@@ -1374,6 +1395,7 @@ test_read_in_middle (void)
     const char data[] = "AAABBBCCC";
     struct test_objs tobjs;
     stream_frame_t *frame;
+    uint64_t n_readable;
 
     init_test_objs(&tobjs, 0x4000, 0x4000, NULL);
 
@@ -1382,26 +1404,36 @@ test_read_in_middle (void)
     frame = new_frame_in_ext(&tobjs, 0, 3, 0, &data[0]);
     s = lsquic_stream_frame_in(stream, frame);
     assert(0 == s);
+    n_readable = stream->data_in->di_if->di_readable_bytes(stream->data_in, 0);
+    assert(3 == n_readable);
 
     /* Hole */
 
     frame = new_frame_in_ext(&tobjs, 6, 3, 0, &data[6]);
     s = lsquic_stream_frame_in(stream, frame);
     assert(0 == s);
+    n_readable = stream->data_in->di_if->di_readable_bytes(stream->data_in, 0);
+    assert(3 == n_readable);
 
     /* Read up to hole */
 
     nw = lsquic_stream_read(stream, buf, sizeof(buf));
     assert(3 == nw);
     assert(0 == memcmp(buf, "AAA", 3));
+    n_readable = stream->data_in->di_if->di_readable_bytes(stream->data_in, 3);
+    assert(0 == n_readable);
 
     frame = new_frame_in_ext(&tobjs, 3, 3, 0, &data[3]);
     s = lsquic_stream_frame_in(stream, frame);
     assert(0 == s);
+    n_readable = stream->data_in->di_if->di_readable_bytes(stream->data_in, 3);
+    assert(6 == n_readable);
 
     nw = lsquic_stream_read(stream, buf, sizeof(buf));
     assert(6 == nw);
     assert(0 == memcmp(buf, "BBBCCC", 6));
+    n_readable = stream->data_in->di_if->di_readable_bytes(stream->data_in, 9);
+    assert(0 == n_readable);
 
     lsquic_stream_destroy(stream);
     deinit_test_objs(&tobjs);
@@ -1464,10 +1496,13 @@ test_reading_from_stream2 (void)
     stream_frame_t *frame;
     ssize_t nw;
     int s;
+    enum stream_state_receiving ssr;
     const char data[10] = "1234567890";
 
     init_test_objs(&tobjs, 0x4000, 0x4000, NULL);
     stream = new_stream(&tobjs, 123);
+    ssr = lsquic_stream_receiving_state(stream);
+    assert(SSR_RECV == ssr);
 
     frame = new_frame_in_ext(&tobjs, 0, 6, 0, &data[0]);
     s = lsquic_stream_frame_in(stream, frame);
@@ -1501,6 +1536,14 @@ test_reading_from_stream2 (void)
                     assert(("Overlap OK", 0 == s));
             }
         }
+    }
+
+    {
+        uint64_t n_readable;
+
+        n_readable = stream->data_in->di_if
+                                    ->di_readable_bytes(stream->data_in, 0);
+        assert(10 == n_readable);
     }
 
     nw = lsquic_stream_read(stream, buf, 8);
@@ -1555,6 +1598,8 @@ test_reading_from_stream2 (void)
                                    */);
     s = lsquic_stream_frame_in(stream, frame);
     assert(("Inserted frame #3", 0 == s));
+    ssr = lsquic_stream_receiving_state(stream);
+    assert(SSR_DATA_RECVD == ssr);
 
     /* Invalid frame: writing after FIN */
     frame = new_frame_in(&tobjs, 10, 2, 0);
@@ -1571,6 +1616,8 @@ test_reading_from_stream2 (void)
 
     nw = lsquic_stream_read(stream, buf, 1);
     assert(("Read 0 bytes (at EOR)", 0 == nw));
+    ssr = lsquic_stream_receiving_state(stream);
+    assert(SSR_DATA_READ == ssr);
 
     lsquic_stream_destroy(stream);
     deinit_test_objs(&tobjs);
@@ -1798,6 +1845,7 @@ test_insert_edge_cases (void)
     int s;
     ssize_t nread;
     const char data[] = "1234567890";
+    enum stream_state_receiving ssr;
     unsigned buf[0x1000];
 
     init_test_objs(&tobjs, 0x4000, 0x4000, NULL);
@@ -1807,6 +1855,8 @@ test_insert_edge_cases (void)
         frame = new_frame_in_ext(&tobjs, 0, 6, 1, &data[0]);
         s = lsquic_stream_frame_in(stream, frame);
         assert(("Inserted frame #1", 0 == s));
+        ssr = lsquic_stream_receiving_state(stream);
+        assert(SSR_DATA_RECVD == ssr);
         /* Invalid frame: different FIN location */
         frame = new_frame_in_ext(&tobjs, 3, 2, 1, &data[3]);
         s = lsquic_stream_frame_in(stream, frame);
@@ -1829,6 +1879,29 @@ test_insert_edge_cases (void)
         frame = new_frame_in_ext(&tobjs, 6, 0, 1, &data[6]);
         s = lsquic_stream_frame_in(stream, frame);
         assert(("Frame OK", 0 == s));
+        nread = lsquic_stream_read(stream, buf, sizeof(buf));
+        assert(nread == 0); /* Hit EOF */
+        frame = new_frame_in_ext(&tobjs, 6, 0, 1, &data[6]);
+        s = lsquic_stream_frame_in(stream, frame);
+        assert(("Duplicate FIN frame", 0 == s));
+        lsquic_stream_destroy(stream);
+    }
+
+    {
+        stream = new_stream(&tobjs, 123);
+        frame = new_frame_in_ext(&tobjs, 6, 0, 1, &data[6]);
+        s = lsquic_stream_frame_in(stream, frame);
+        assert(("Frame OK", 0 == s));
+        ssr = lsquic_stream_receiving_state(stream);
+        assert(SSR_SIZE_KNOWN == ssr);
+        frame = new_frame_in_ext(&tobjs, 0, 6, 0, &data[0]);
+        s = lsquic_stream_frame_in(stream, frame);
+        assert(("Inserted frame #1", 0 == s));
+        nread = lsquic_stream_read(stream, buf, sizeof(buf));
+        assert(6 == nread);
+        frame = new_frame_in_ext(&tobjs, 6, 0, 0, &data[6]);
+        s = lsquic_stream_frame_in(stream, frame);
+        assert(("Duplicate frame", 0 == s));
         nread = lsquic_stream_read(stream, buf, sizeof(buf));
         assert(nread == 0); /* Hit EOF */
         frame = new_frame_in_ext(&tobjs, 6, 0, 1, &data[6]);
@@ -2582,17 +2655,22 @@ test_forced_flush_when_conn_blocked (void)
     struct test_objs tobjs;
     struct lsquic_stream *stream;
     struct lsquic_conn_cap *const conn_cap = &tobjs.conn_pub.conn_cap;
+    enum stream_state_sending sss;
 
     init_test_ctl_settings(&g_ctl_settings);
     g_ctl_settings.tcs_schedule_stream_packets_immediately = 1;
 
     init_test_objs(&tobjs, 3, 0x1000, NULL);
     stream = new_stream(&tobjs, 123);
+    sss = lsquic_stream_sending_state(stream);
+    assert(SSS_READY == sss);
     nw = lsquic_stream_write(stream, "1234567890", 10);
     assert(("lsquic_stream_write is limited by the send window", 3 == nw));
     assert(("cc_tosend is updated immediately",
                                             3 == conn_cap->cc_sent));
     assert(1 == lsquic_send_ctl_n_scheduled(&tobjs.send_ctl)); /* Flush occurred */
+    sss = lsquic_stream_sending_state(stream);
+    assert(SSS_SEND == sss);
     assert(tobjs.lconn.cn_flags & LSCONN_SEND_BLOCKED);
     assert(3 == conn_cap->cc_blocked);
 

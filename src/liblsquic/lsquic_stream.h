@@ -16,6 +16,7 @@ enum enc_level;
 enum swtp_status;
 struct frame_gen_ctx;
 struct data_frame;
+enum quic_ft_bit;
 
 TAILQ_HEAD(lsquic_streams_tailq, lsquic_stream);
 
@@ -59,6 +60,7 @@ enum stream_id_type
 #define SIT_MASK (N_SITS - 1)
 
 #define SIT_SHIFT 2
+#define SD_SHIFT 1
 
 enum stream_dir { SD_BIDI, SD_UNI, N_SDS };
 
@@ -169,6 +171,10 @@ enum stream_flags {
     STREAM_RW_ONCE      = 1 << 19,  /* When set, read/write events are dispatched once per call */
     STREAM_IETF         = 1 << 20,
     STREAM_CRYPTO       = 1 << 21,
+    STREAM_RST_ACKED    = 1 << 22,  /* Packet containing RST has been acked */
+    STREAM_BLOCKED_SENT = 1 << 23,  /* Stays set once a STREAM_BLOCKED frame is sent */
+    STREAM_RST_READ     = 1 << 24,  /* User code collected the error */
+    STREAM_DATA_RECVD   = 1 << 25,  /* Cache stream state calculation */
 };
 
 struct lsquic_stream
@@ -218,6 +224,9 @@ struct lsquic_stream
 
     unsigned char                  *sm_header_block;
     uint64_t                        sm_hb_compl;
+
+    /* Valid if STREAM_FIN_RECVD is set: */
+    uint64_t                        sm_fin_off;
 
     /* A stream may be generating STREAM or CRYPTO frames */
     size_t                        (*sm_frame_header_sz)(
@@ -325,6 +334,9 @@ lsquic_stream_push_req (lsquic_stream_t *,
 int
 lsquic_stream_rst_in (lsquic_stream_t *, uint64_t offset, uint32_t error_code);
 
+void
+lsquic_stream_stop_sending_in (struct lsquic_stream *, uint16_t error_code);
+
 ssize_t
 lsquic_stream_read (lsquic_stream_t *stream, void *buf, size_t len);
 
@@ -388,7 +400,7 @@ void
 lsquic_stream_received_goaway (lsquic_stream_t *);
 
 void
-lsquic_stream_acked (lsquic_stream_t *);
+lsquic_stream_acked (struct lsquic_stream *, enum quic_ft_bit);
 
 #define lsquic_stream_is_closed(s)                                          \
     (((s)->stream_flags & (STREAM_U_READ_DONE|STREAM_U_WRITE_DONE))         \
@@ -435,5 +447,37 @@ lsquic_stream_get_qdh (const struct lsquic_stream *);
 
 uint64_t
 lsquic_stream_combined_send_off (const struct lsquic_stream *);
+
+/* [draft-ietf-quic-transport-16] Section 3.1 */
+enum stream_state_sending
+{
+    SSS_READY,
+    SSS_SEND,
+    SSS_DATA_SENT,
+    SSS_RESET_SENT,
+    SSS_DATA_RECVD,
+    SSS_RESET_RECVD,
+};
+
+extern const char *const lsquic_sss2str[];
+
+enum stream_state_sending
+lsquic_stream_sending_state (const struct lsquic_stream *);
+
+/* [draft-ietf-quic-transport-16] Section 3.2 */
+enum stream_state_receiving
+{
+    SSR_RECV,
+    SSR_SIZE_KNOWN,
+    SSR_DATA_RECVD,
+    SSR_RESET_RECVD,
+    SSR_DATA_READ,
+    SSR_RESET_READ,
+};
+
+extern const char *const lsquic_ssr2str[];
+
+enum stream_state_receiving
+lsquic_stream_receiving_state (struct lsquic_stream *);
 
 #endif

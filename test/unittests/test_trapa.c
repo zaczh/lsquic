@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "lsquic_types.h"
+#include "lsquic_sizes.h"
 #include "lsquic_trans_params.h"
 
 #define ENC_BUF_SZ 0x1000
