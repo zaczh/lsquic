@@ -1498,6 +1498,42 @@ id15_parse_max_stream_data_frame (const unsigned char *buf, size_t len,
 }
 
 
+static size_t
+id15_new_connection_id_frame_size (unsigned seqno, unsigned scid_len)
+{
+    unsigned bits;
+
+    bits = vint_val2bits(seqno);
+    return 1 + 1 + (1 << bits) + scid_len + IQUIC_SRESET_TOKEN_SZ;
+}
+
+
+int
+id15_gen_new_connection_id_frame (unsigned char *buf, size_t buf_sz,
+            unsigned seqno, const struct lsquic_cid *cid,
+            const unsigned char *token, size_t token_sz)
+{
+    unsigned char *p;
+    unsigned bits;
+
+    if (buf_sz < id15_new_connection_id_frame_size(seqno, cid->len))
+        return -1;
+
+    p = buf;
+    *p++ = 0x0B;
+    *p++ = cid->len;
+    bits = vint_val2bits(seqno);
+    vint_write(p, seqno, bits, 1 << bits);
+    p += 1 << bits;
+    memcpy(p, cid->idbuf, cid->len);
+    p += cid->len;
+    memcpy(p, token, token_sz);
+    p += token_sz;
+
+    return p - buf;
+}
+
+
 const struct parse_funcs lsquic_parse_funcs_id15 =
 {
     .pf_gen_reg_pkt_header            =  id15_gen_reg_pkt_header,
@@ -1547,4 +1583,6 @@ const struct parse_funcs lsquic_parse_funcs_id15 =
     .pf_max_stream_data_frame_size    =  id15_max_stream_data_frame_size,
     .pf_parse_stop_sending_frame      =  id15_parse_stop_sending_frame,
     .pf_parse_new_token_frame         =  id15_parse_new_token_frame,
+    .pf_new_connection_id_frame_size  =  id15_new_connection_id_frame_size,
+    .pf_gen_new_connection_id_frame   =  id15_gen_new_connection_id_frame,
 };

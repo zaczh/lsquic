@@ -17,7 +17,6 @@ struct parse_funcs;
 struct stream_frame;
 struct uncompressed_headers;
 
-
 /* Log a generic event not tied to any particular connection */
 #define EV_LOG_GENERIC_EVENT(...) do {                                      \
     if (LSQ_LOG_ENABLED_EXT(LSQ_LOG_DEBUG, LSQLM_EVENT))                    \
@@ -212,12 +211,12 @@ lsquic_ev_log_generated_ack_frame (const lsquic_cid_t *,
 } while (0)
 
 void
-lsquic_ev_log_generated_new_token_frame (const lsquic_cid_t *,
+lsquic_ev_log_generated_new_connection_id_frame (const lsquic_cid_t *,
                 const struct parse_funcs *, const unsigned char *, size_t len);
 
-#define EV_LOG_GENERATED_NEW_TOKEN_FRAME(...) do {                          \
+#define EV_LOG_GENERATED_NEW_CONNECTION_ID_FRAME(...) do {                  \
     if (LSQ_LOG_ENABLED_EXT(LSQ_LOG_DEBUG, LSQLM_EVENT))                    \
-        lsquic_ev_log_generated_new_token_frame(__VA_ARGS__);               \
+        lsquic_ev_log_generated_new_connection_id_frame(__VA_ARGS__);       \
 } while (0)
 
 void
@@ -233,7 +232,6 @@ void
 lsquic_ev_log_generated_http_headers (const lsquic_cid_t *, lsquic_stream_id_t,
                             int is_server, const struct http_prio_frame *,
                             const struct lsquic_http_headers *);
-
 
 #define EV_LOG_GENERATED_HTTP_HEADERS(...) do {                             \
     if (LSQ_LOG_ENABLED_EXT(LSQ_LOG_DEBUG, LSQLM_EVENT))                    \

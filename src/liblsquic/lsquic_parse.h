@@ -234,6 +234,12 @@ struct parse_funcs
     int
     (*pf_parse_new_token_frame) (const unsigned char *buf, size_t,
                             const unsigned char **token, size_t *token_size);
+    size_t
+    (*pf_new_connection_id_frame_size) (unsigned seqno, unsigned cid_len);
+    int
+    (*pf_gen_new_connection_id_frame) (unsigned char *buf, size_t,
+                unsigned seqno, const struct lsquic_cid *,
+                const unsigned char *token, size_t);
 };
 
 extern const struct parse_funcs lsquic_parse_funcs_gquic_le;

@@ -1561,6 +1561,33 @@ lsquic_engine_count_attq (lsquic_engine_t *engine, int from_now)
 }
 
 
+int
+lsquic_engine_add_cid (struct lsquic_engine_public *enpub,
+                              struct lsquic_conn *conn, unsigned cce_idx)
+{
+    struct lsquic_engine *const engine = (struct lsquic_engine *) enpub;
+    struct conn_cid_elem *const cce = &conn->cn_cces[cce_idx];
+
+    assert(cce_idx < conn->cn_n_cces);
+    assert(cce_idx != conn->cn_cur_cce_idx);
+    assert(!(cce->cce_hash_el.qhe_flags & QHE_HASHED));
+
+    if (lsquic_hash_insert(engine->conns_hash, cce->cce_cid.idbuf,
+                                    cce->cce_cid.len, conn, &cce->cce_hash_el))
+    {
+        LSQ_DEBUGC("add %"CID_FMT" to the list of SCIDs",
+                                                    CID_BITS(&cce->cce_cid));
+        return 0;
+    }
+    else
+    {
+        LSQ_WARNC("could not add new cid %"CID_FMT" to the SCID hash",
+                                                    CID_BITS(&cce->cce_cid));
+        return -1;
+    }
+}
+
+
 void
 lsquic_engine_retire_cid (struct lsquic_engine_public *enpub,
               struct lsquic_conn *conn, unsigned cce_idx, lsquic_time_t now)

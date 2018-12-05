@@ -104,6 +104,7 @@ enum ifull_conn_flags
     IFC_SEND_GOAWAY   = 1 << 23,
     IFC_GOAWAY_SENT   = 1 << 24,
     IFC_GOT_PRST      = 1 << 25,
+    IFC_SEND_NEW_CID  = 1 << 27,
 };
 
 #define IFC_IMMEDIATE_CLOSE_FLAGS \
@@ -233,6 +234,7 @@ struct ietf_full_conn
                     qpack_blocked_streams;
     }                           ifc_peer_hq_settings;
     struct dcid_elem           *ifc_dces[8];
+    unsigned                    ifc_scid_seqno;
 };
 
 static const struct conn_iface *ietf_full_conn_iface_ptr;
@@ -568,6 +570,7 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *enpub,
 {
     const struct enc_session_funcs_iquic *esfi;
     struct ietf_full_conn *conn;
+    struct conn_cid_elem *cce;
     enum lsquic_version ver;
     unsigned versions;
 
@@ -582,7 +585,14 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *enpub,
     assert(versions);
     ver = highest_bit_set(versions);
     esfi = select_esf_iquic_by_ver(ver);
-    esfi->esfi_assign_scid(enpub, &conn->ifc_conn);
+    cce = esfi->esfi_add_scid(enpub, &conn->ifc_conn);
+    if (!cce)
+    {
+        free(conn);
+        return NULL;
+    }
+    cce->cce_seqno = conn->ifc_scid_seqno++;
+    cce->cce_flags = CCE_USED;
 
     if (!max_packet_size)
     {
@@ -744,6 +754,79 @@ static void
 generate_max_data_frame (struct ietf_full_conn *conn)
 {
     LSQ_WARN("%s: TODO", __func__);   /* TODO */
+}
+
+
+static int
+generate_new_cid_frame (struct ietf_full_conn *conn)
+{
+    struct lsquic_packet_out *packet_out;
+    struct conn_cid_elem *cce;
+    size_t need;
+    int w;
+    unsigned char token_buf[IQUIC_SRESET_TOKEN_SZ];
+
+    assert(conn->ifc_enpub->enp_settings.es_scid_len);
+
+    need = conn->ifc_conn.cn_pf->pf_new_connection_id_frame_size(
+            conn->ifc_scid_seqno, conn->ifc_enpub->enp_settings.es_scid_len);
+    packet_out = get_writeable_packet(conn, need);
+    if (!packet_out)
+        return -1;
+
+    cce = conn->ifc_conn.cn_esf.i->esfi_add_scid(conn->ifc_enpub,
+                                                            &conn->ifc_conn);
+    if (!cce)
+    {
+        ABORT_WARN("cannot add a new SCID");
+        return -1;
+    }
+    cce->cce_seqno = conn->ifc_scid_seqno++;
+
+        memset(token_buf, 0, sizeof(token_buf));
+
+    if (0 != lsquic_engine_add_cid(conn->ifc_enpub, &conn->ifc_conn,
+                                                        cce - conn->ifc_cces))
+    {
+        ABORT_WARN("cannot track new SCID");
+        return -1;
+    }
+
+    w = conn->ifc_conn.cn_pf->pf_gen_new_connection_id_frame(
+            packet_out->po_data + packet_out->po_data_sz,
+            lsquic_packet_out_avail(packet_out), cce->cce_seqno,
+            &cce->cce_cid, token_buf, sizeof(token_buf));
+    if (w < 0)
+    {
+        ABORT_ERROR("generating NEW_CONNECTION_ID frame failed: %d", errno);
+        return -1;
+    }
+    LSQ_DEBUGC("generated %d-byte NEW_CONNECTION_ID frame (CID: %"CID_FMT")",
+        w, CID_BITS(&cce->cce_cid));
+    EV_LOG_GENERATED_NEW_CONNECTION_ID_FRAME(LSQUIC_LOG_CONN_ID,
+        conn->ifc_conn.cn_pf, packet_out->po_data + packet_out->po_data_sz, w);
+    packet_out->po_frame_types |= QUIC_FTBIT_NEW_CONNECTION_ID;
+    lsquic_send_ctl_incr_pack_sz(&conn->ifc_send_ctl, packet_out, w);
+
+    if ((1 << conn->ifc_conn.cn_n_cces) - 1 == conn->ifc_conn.cn_cces_mask)
+    {
+        conn->ifc_flags &= ~IFC_SEND_NEW_CID;
+        LSQ_DEBUG("All %u SCID slots have been assigned",
+                                                conn->ifc_conn.cn_n_cces);
+    }
+
+    return 0;
+}
+
+
+static void
+generate_new_cid_frames (struct ietf_full_conn *conn)
+{
+    int s;
+
+    do
+        s = generate_new_cid_frame(conn);
+    while (0 == s && (conn->ifc_flags & IFC_SEND_NEW_CID));
 }
 
 
@@ -1193,6 +1276,7 @@ ietf_full_conn_ci_handshake_ok (struct lsquic_conn *lconn)
         return;
     }
 
+    memset(dce, 0, sizeof(*dce));
     dce->de_cid = conn->ifc_conn.cn_dcid;
     dce->de_seqno = 0;
     if (params.tp_flags & TPI_STATELESS_RESET_TOKEN)
@@ -1260,6 +1344,8 @@ ietf_full_conn_ci_handshake_ok (struct lsquic_conn *lconn)
                 "unidir limits");
     }
 
+    if ((1 << conn->ifc_conn.cn_n_cces) - 1 != conn->ifc_conn.cn_cces_mask)
+        conn->ifc_flags |= IFC_SEND_NEW_CID;
     if ((conn->ifc_flags & (IFC_HTTP|IFC_HAVE_PEER_SET)) != IFC_HTTP)
         maybe_create_delayed_streams(conn);
 }
@@ -1279,7 +1365,7 @@ ietf_full_conn_ci_is_tickable (struct lsquic_conn *lconn)
             !lsquic_send_ctl_sched_is_blocked(&conn->ifc_send_ctl)))
     {
         if (conn->ifc_flags & (IFC_SEND_GOAWAY |IFC_SEND_PING
-                                |IFC_SEND_WUF ))
+                                |IFC_SEND_WUF|IFC_SEND_NEW_CID ))
             return 1;
         if (lsquic_send_ctl_has_buffered(&conn->ifc_send_ctl))
             return 1;
@@ -2369,17 +2455,64 @@ static unsigned
 process_new_connection_id_frame (struct ietf_full_conn *conn,
         struct lsquic_packet_in *packet_in, const unsigned char *p, size_t len)
 {
+    struct dcid_elem **dce, **el;
+    const unsigned char *token;
+    const char *action_str;
     lsquic_cid_t cid;
     uint64_t seqno;
     int parsed_len;
 
     parsed_len = conn->ifc_conn.cn_pf->pf_parse_new_conn_id(p, len, &seqno,
-                                                                    &cid, NULL);
+                                                                &cid, &token);
     if (parsed_len < 0)
         return 0;
 
+    dce = NULL;
+    for (el = conn->ifc_dces; el < conn->ifc_dces + sizeof(conn->ifc_dces)
+                                            / sizeof(conn->ifc_dces[0]); ++el)
+        if (*el)
+        {
+            if ((*el)->de_seqno == seqno)
+            {
+                if (!LSQUIC_CIDS_EQ(&(*el)->de_cid, &cid))
+                {
+                    ABORT_QUIETLY(TEC_PROTOCOL_VIOLATION,
+                        "NEW_CONNECTION_ID: already have CID seqno %"PRIu64
+                        " but with a different CID", seqno);
+                    return 0;
+                }
+            }
+            else if (LSQUIC_CIDS_EQ(&(*el)->de_cid, &cid))
+            {
+                ABORT_QUIETLY(TEC_PROTOCOL_VIOLATION,
+                    "NEW_CONNECTION_ID: received the same CID with sequence "
+                    "numbers %u and %"PRIu64, (*el)->de_seqno, seqno);
+                return 0;
+            }
+        }
+        else if (!dce)
+            dce = el;
+
+    if (dce)
+    {
+        *dce = lsquic_malo_get(conn->ifc_pub.mm->malo.dcid_elem);
+        if (*dce)
+        {
+            memset(*dce, 0, sizeof(**dce));
+            (*dce)->de_seqno = seqno;
+            (*dce)->de_cid = cid;
+            memcpy((*dce)->de_srst, token, sizeof((*dce)->de_srst));
+            (*dce)->de_flags |= DE_SRST;
+            action_str = "Saved";
+        }
+        else
+            action_str = "Ignored (alloc failure)";
+    }
+    else
+        action_str = "Ignored (no slots available)";
+
     LSQ_DEBUGC("Got new connection ID from peer: seq=%"PRIu64"; "
-        "cid: %"CID_FMT".  Ignore for now", seqno, CID_BITS(&cid));  /* TODO */
+        "cid: %"CID_FMT".  %s.", seqno, CID_BITS(&cid), action_str);
     return parsed_len;
 }
 
@@ -2661,6 +2794,74 @@ is_stateless_reset (struct ietf_full_conn *conn,
 }
 
 
+/* From [draft-ietf-quic-transport-16, Section-9.5:
+ *
+ * Caution:  If both endpoints change connection ID in response to
+ *    seeing a change in connection ID from their peer, then this can
+ *    trigger an infinite sequence of changes.
+ *
+ * XXX Add flag to only switch DCID if we weren't the initiator.
+ */
+static int
+on_dcid_change (struct ietf_full_conn *conn, const lsquic_cid_t *dcid_in)
+{
+    struct lsquic_conn *const lconn = &conn->ifc_conn;  /* Shorthand */
+    struct conn_cid_elem *cce;
+    struct dcid_elem **el, **dces[2];
+    int eq;
+
+    for (cce = lconn->cn_cces; cce < lconn->cn_cces + lconn->cn_n_cces; ++cce)
+        if (cce - lconn->cn_cces != lconn->cn_cur_cce_idx
+                && (lconn->cn_cces_mask & (1 << (cce - lconn->cn_cces)))
+                    && LSQUIC_CIDS_EQ(&cce->cce_cid, dcid_in))
+            break;
+
+    if (!cce)
+    {
+        ABORT_WARN("new DCID not found");
+        return -1;
+    }
+
+    if (cce->cce_flags & CCE_USED)
+    {
+        LSQ_DEBUGC("non-matching new DCID %"CID_FMT" has already been used, "
+            "not switching DCID", CID_BITS(dcid_in));
+        return 0;
+    }
+
+    dces[0] = NULL;
+    dces[1] = NULL;
+    for (el = conn->ifc_dces; el < conn->ifc_dces + sizeof(conn->ifc_dces)
+                    / sizeof(conn->ifc_dces[0]) && !(dces[0] && dces[1]); ++el)
+        if (*el)
+        {
+            eq = LSQUIC_CIDS_EQ(&(*el)->de_cid, &lconn->cn_dcid);
+            if (!dces[eq])
+                dces[eq] = el;
+        }
+
+    if (!dces[1])
+    {
+        ABORT_WARN("%s: cannot find own DCID", __func__);
+        return -1;
+    }
+
+    if (!dces[0])
+    {
+        LSQ_INFO("No DCID available: cannot switch");
+        return 0;
+    }
+
+    cce->cce_flags |= CCE_USED;
+    lconn->cn_cur_cce_idx = cce - lconn->cn_cces;
+    lconn->cn_dcid = (*dces[0])->de_cid;
+    LSQ_INFO("switched DCID");
+    /* TODO: retire dces[1] */
+
+    return 0;
+}
+
+
 static int
 process_regular_packet (struct ietf_full_conn *conn,
                                         struct lsquic_packet_in *packet_in)
@@ -2728,6 +2929,11 @@ process_regular_packet (struct ietf_full_conn *conn,
             conn->ifc_n_slack_akbl[pns]
                                 += !!(frame_types & IQUIC_FRAME_ACKABLE_MASK);
             try_queueing_ack(conn, pns, was_missing, packet_in->pi_received);
+        }
+        if (!LSQUIC_CIDS_EQ(CN_SCID(&conn->ifc_conn), &packet_in->pi_dcid))
+        {
+            if (0 != on_dcid_change(conn, &packet_in->pi_dcid))
+                return -1;
         }
         return 0;
     case REC_ST_DUP:
@@ -2977,6 +3183,11 @@ ietf_full_conn_ci_tick (struct lsquic_conn *lconn, lsquic_time_t now)
         CLOSE_IF_NECESSARY();
     }
 
+        if (conn->ifc_flags & IFC_SEND_NEW_CID)
+        {
+            generate_new_cid_frames(conn);
+            CLOSE_IF_NECESSARY();
+        }
 
     n = lsquic_send_ctl_reschedule_packets(&conn->ifc_send_ctl);
     if (n > 0)

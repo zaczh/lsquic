@@ -1061,15 +1061,36 @@ iquic_esf_get_server_cert_chain (enc_session_t *enc_session_p)
 }
 
 
-static void
-iquic_esfi_assign_scid (const struct lsquic_engine_public *enpub,
+static struct conn_cid_elem *
+iquic_esfi_add_scid (const struct lsquic_engine_public *enpub,
                                                     struct lsquic_conn *lconn)
 {
+    struct conn_cid_elem *cce;
+
     if (enpub->enp_settings.es_scid_len)
-        generate_cid(CN_SCID(lconn), enpub->enp_settings.es_scid_len);
-    lconn->cn_cces_mask = 1;    /* XXX */
+    {
+        for (cce = lconn->cn_cces;
+                        cce < lconn->cn_cces + lconn->cn_n_cces; ++cce)
+            if (!(lconn->cn_cces_mask & (1 << (cce - lconn->cn_cces))))
+                break;
+    }
+    else if (0 == lconn->cn_cces_mask)
+        cce = lconn->cn_cces;
+    else
+        cce = NULL;
+
+    if (!cce)
+    {
+        LSQ_LOG1(LSQ_LOG_DEBUG, "cannot find slot for new SCID");
+        return NULL;
+    }
+
+    if (enpub->enp_settings.es_scid_len)
+        generate_cid(&cce->cce_cid, enpub->enp_settings.es_scid_len);
+    lconn->cn_cces_mask |= 1 << (cce - lconn->cn_cces);
     LSQ_LOG1C(LSQ_LOG_DEBUG, "generated and assigned SCID %"CID_FMT,
-                                                    CID_BITS(CN_SCID(lconn)));
+                                                    CID_BITS(&cce->cce_cid));
+    return cce;
 }
 
 
@@ -1092,7 +1113,7 @@ iquic_esfi_reset_dcid (enc_session_t *enc_session_p, const lsquic_cid_t *dcid)
 
 const struct enc_session_funcs_iquic lsquic_enc_session_iquic_id15 =
 {
-    .esfi_assign_scid    = iquic_esfi_assign_scid,
+    .esfi_add_scid       = iquic_esfi_add_scid,
     .esfi_create_client  = iquic_esfi_create_client,
     .esfi_destroy        = iquic_esfi_destroy,
     .esfi_handshake      = iquic_esfi_handshake,

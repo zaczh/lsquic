@@ -13,6 +13,7 @@ struct lsquic_cid;
 struct ssl_stream_method_st;
 struct ssl_st;
 struct sockaddr;
+struct conn_cid_elem;
 
 #define DNONC_LENGTH 32
 #define SRST_LENGTH 16
@@ -159,8 +160,8 @@ struct crypto_stream_if
 
 struct enc_session_funcs_iquic
 {
-    void
-    (*esfi_assign_scid) (const struct lsquic_engine_public *,
+    struct conn_cid_elem *
+    (*esfi_add_scid) (const struct lsquic_engine_public *,
                                                     struct lsquic_conn *);
 
     enc_session_t *

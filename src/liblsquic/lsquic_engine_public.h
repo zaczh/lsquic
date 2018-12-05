@@ -52,4 +52,8 @@ void
 lsquic_engine_retire_cid (struct lsquic_engine_public *,
               struct lsquic_conn *, unsigned cce_idx, lsquic_time_t now);
 
+int
+lsquic_engine_add_cid (struct lsquic_engine_public *,
+                              struct lsquic_conn *, unsigned cce_idx);
+
 #endif

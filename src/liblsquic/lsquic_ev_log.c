@@ -327,29 +327,29 @@ lsquic_ev_log_generated_ack_frame (const lsquic_cid_t *cid,
 
 
 void
-lsquic_ev_log_generated_new_token_frame (const lsquic_cid_t *cid,
+lsquic_ev_log_generated_new_connection_id_frame (const lsquic_cid_t *cid,
                 const struct parse_funcs *pf, const unsigned char *frame_buf,
                 size_t frame_buf_sz)
 {
     const unsigned char *token;
-    size_t sz;
-    char *buf;
+    lsquic_cid_t new_cid;
+    uint64_t seqno;
     int len;
+    char token_buf[IQUIC_SRESET_TOKEN_SZ * 2 + 1];
+    char cid_buf[MAX_CID_LEN * 2 + 1];
 
-    len = pf->pf_parse_new_token_frame(frame_buf, frame_buf_sz, &token, &sz);
+    len = pf->pf_parse_new_conn_id(frame_buf, frame_buf_sz, &seqno, &new_cid,
+                                                                        &token);
     if (len < 0)
     {
-        LSQ_LOG2(LSQ_LOG_WARN, "cannot parse NEW_TOKEN frame");
+        LSQ_LOG2(LSQ_LOG_WARN, "cannot parse NEW_CONNECTION_ID frame");
         return;
     }
 
-    buf = malloc(sz * 2 + 1);
-    if (buf)
-    {
-        lsquic_hexstr(token, sz, buf, sz * 2 + 1);
-        LCID("generated NEW_TOKEN frame: %s", buf);
-        free(buf);
-    }
+    lsquic_hexstr(new_cid.idbuf, new_cid.len, cid_buf, sizeof(cid_buf));
+    lsquic_hexstr(token, IQUIC_SRESET_TOKEN_SZ, token_buf, sizeof(token_buf));
+    LCID("generated NEW_CONNECTION_ID frame: seqno: %"PRIu64"; cid: %s; "
+        "token: %s", seqno, cid_buf, token_buf);
 }
 
 

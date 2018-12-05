@@ -145,6 +145,10 @@ struct conn_cid_elem
 {
     struct lsquic_hash_elem     cce_hash_el;    /* Must be first element */
     lsquic_cid_t                cce_cid;
+    unsigned                    cce_seqno;
+    enum {
+        CCE_USED        = 1 << 0,       /* Connection ID has been used */
+    }                           cce_flags;
 };
 
 struct lsquic_conn
@@ -180,10 +184,14 @@ struct lsquic_conn
     struct conn_cid_elem         cn_cces_buf[8];
 #define LSCONN_INITIALIZER_CID(lsconn_, cid_) { \
                 .cn_cces = (lsconn_).cn_cces_buf, \
+                .cn_cces_buf[0].cce_seqno = 0, \
+                .cn_cces_buf[0].cce_flags = 0, \
                 .cn_cces_buf[0].cce_cid = (cid_), \
                 .cn_n_cces = 8, .cn_cces_mask = 1, }
 #define LSCONN_INITIALIZER_CIDLEN(lsconn_, len_) { \
                 .cn_cces = (lsconn_).cn_cces_buf, \
+                .cn_cces_buf[0].cce_seqno = 0, \
+                .cn_cces_buf[0].cce_flags = 0, \
                 .cn_cces_buf[0].cce_cid = { .len = len_ }, \
                 .cn_n_cces = 8, .cn_cces_mask = 1, }
 #define LSCONN_INITIALIZE(lsconn_) do { \
