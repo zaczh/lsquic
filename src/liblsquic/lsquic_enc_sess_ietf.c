@@ -65,7 +65,7 @@ struct enc_sess_iquic;
 struct crypto_ctx;
 struct crypto_ctx_pair;
 
-static const SSL_STREAM_METHOD cry_stream_method;
+static const SSL_QUIC_METHOD cry_quic_method;
 
 static int
 setup_handshake_keys (struct enc_sess_iquic *, const lsquic_cid_t *);
@@ -173,13 +173,6 @@ struct enc_sess_iquic
                          esi_dir[2];        /* client, server */
     enum header_type     esi_header_type;
     enum enc_level       esi_last_w;
-    struct
-    {
-        int                             flags;
-        enum ssl_encryption_level_t     level;
-        size_t                          len[2];
-        unsigned char                   buf[2][EVP_MAX_MD_SIZE];
-    }                    esi_new_secret;
     char                *esi_hostname;
 };
 
@@ -523,6 +516,11 @@ init_client (struct enc_sess_iquic *const enc_sess)
     SSL_CTX_set_min_proto_version(ssl_ctx, TLS1_3_VERSION);
     SSL_CTX_set_max_proto_version(ssl_ctx, TLS1_3_VERSION);
     SSL_CTX_set_default_verify_paths(ssl_ctx);
+    if (!(SSL_CTX_set_quic_method(ssl_ctx, &cry_quic_method)))
+    {
+        LSQ_INFO("could not set stream method");
+        goto err;
+    }
 
     transpa_len = gen_trans_params(enc_sess, trans_params,
                                                     sizeof(trans_params));
@@ -658,59 +656,6 @@ get_crypto_params (const struct enc_sess_iquic *enc_sess,
     }
 
     return 0;
-}
-
-
-static int
-apply_new_secret (struct enc_sess_iquic *enc_sess, enum enc_level enc_level)
-{
-    struct crypto_ctx_pair *pair;
-    struct crypto_params crypa;
-    int i;
-    char errbuf[ERR_ERROR_STRING_BUF_LEN];
-#define hexbuf errbuf
-
-    if (enc_sess->esi_crypto_pair[enc_level])
-    {   /* TODO: handle key phase */
-        LSQ_ERROR("secret on level %u already exists", enc_level);
-        return -1;
-    }
-
-    if (0 != get_crypto_params(enc_sess, &crypa))
-        return -1;
-
-    pair = calloc(1, sizeof(*pair));
-    if (!pair)
-        return -1;
-
-    for (i = 1; i >= 0; --i)
-    {
-        if (enc_sess->esi_flags & ESI_LOG_SECRETS)
-            LSQ_DEBUG("new %s secret: %s", i ? "server" : "client",
-                HEXSTR(enc_sess->esi_new_secret.buf[i],
-                enc_sess->esi_new_secret.len[i], hexbuf));
-        if (0 != init_crypto_ctx(&pair->ykp_ctx[i], crypa.md,
-                    crypa.aead, enc_sess->esi_new_secret.buf[i],
-                    enc_sess->esi_new_secret.len[i], enc_sess->esi_dir[i]))
-            goto err;
-    }
-
-    if (enc_sess->esi_flags & ESI_LOG_SECRETS)
-        log_crypto_pair(enc_sess, pair, "new");
-
-    pair->ykp_enc_level  = enc_level;
-    pair->ykp_pn         = crypa.pn;
-    pair->ykp_encrypt_pn = crypa.enc_pn_f;
-    pair->ykp_decrypt_pn = crypa.dec_pn_f;
-    enc_sess->esi_crypto_pair[enc_level] = pair;
-    return 0;
-
-  err:
-    cleanup_crypto_ctx(&pair->ykp_ctx[0]);
-    cleanup_crypto_ctx(&pair->ykp_ctx[1]);
-    free(pair);
-    return -1;
-#undef hexbuf
 }
 
 
@@ -1053,8 +998,8 @@ iquic_esf_get_server_cert_chain (enc_session_t *enc_session_p)
     {
         chain = SSL_get_peer_cert_chain(enc_sess->esi_ssl);
         return (struct stack_st_X509 *)
-            sk_deep_copy((const _STACK *) chain, copy_X509,
-                                                (void(*)(void*))X509_free);
+            sk_deep_copy((const _STACK *) chain, sk_X509_call_copy_func,
+                copy_X509, sk_X509_call_free_func, (void(*)(void*))X509_free);
     }
     else
         return NULL;
@@ -1135,44 +1080,77 @@ const struct enc_session_funcs_common lsquic_enc_session_common_id15 =
 
 
 typedef char enums_have_the_same_value[
-    (int) ssl_el_initial     == (int) ENC_LEV_CLEAR &&
-    (int) ssl_el_early_data  == (int) ENC_LEV_EARLY &&
-    (int) ssl_el_handshake   == (int) ENC_LEV_INIT  &&
-    (int) ssl_el_application == (int) ENC_LEV_FORW      ? 1 : -1];
+    (int) ssl_encryption_initial     == (int) ENC_LEV_CLEAR &&
+    (int) ssl_encryption_early_data  == (int) ENC_LEV_EARLY &&
+    (int) ssl_encryption_handshake   == (int) ENC_LEV_INIT  &&
+    (int) ssl_encryption_application == (int) ENC_LEV_FORW      ? 1 : -1];
 
 static int
 cry_sm_set_encryption_secret (SSL *ssl, enum ssl_encryption_level_t level,
-                      int is_write, const uint8_t *secret, size_t secret_len)
+                    const uint8_t *read_secret, const uint8_t *write_secret,
+                    size_t secret_len)
 {
     struct enc_sess_iquic *enc_sess;
-    int dir;
+    struct crypto_ctx_pair *pair;
+    struct crypto_params crypa;
+    int i;
+    const enum enc_level enc_level = level;
+    const uint8_t *secrets[2];
+    char errbuf[ERR_ERROR_STRING_BUF_LEN];
+#define hexbuf errbuf
 
     enc_sess = SSL_get_app_data(ssl);
-    if (!enc_sess || secret_len > sizeof(enc_sess->esi_new_secret.buf[0]))
+    if (!enc_sess)
         return 0;
 
-    dir = !is_write;
-
-    memcpy(enc_sess->esi_new_secret.buf[dir], secret, secret_len);
-    enc_sess->esi_new_secret.len[dir] = secret_len;
-    enc_sess->esi_new_secret.flags |= 1 << !!is_write;
-    enc_sess->esi_new_secret.level = level;
-    LSQ_DEBUG("set %s encr secret on level %u", is_write ? "write" : "read",
-                                                                        level);
-    if (3 == enc_sess->esi_new_secret.flags)
-    {
-        if (0 != apply_new_secret(enc_sess, (enum enc_level) level))
-            return 0;
-        memset(&enc_sess->esi_new_secret, 0, sizeof(enc_sess->esi_new_secret));
+    if (enc_sess->esi_crypto_pair[enc_level])
+    {   /* TODO: handle key phase */
+        LSQ_ERROR("secret on level %u already exists", enc_level);
+        return 0;
     }
 
+    if (0 != get_crypto_params(enc_sess, &crypa))
+        return 0;
+
+        secrets[0] = write_secret, secrets[1] = read_secret;
+
+    pair = calloc(1, sizeof(*pair));
+    if (!pair)
+        return 0;
+
+    LSQ_DEBUG("set encryption for level %u", enc_level);
+    for (i = 1; i >= 0; --i)
+    {
+        if (enc_sess->esi_flags & ESI_LOG_SECRETS)
+            LSQ_DEBUG("new %s secret: %s", i ? "server" : "client",
+                                HEXSTR(secrets[i], secret_len, hexbuf));
+        if (0 != init_crypto_ctx(&pair->ykp_ctx[i], crypa.md,
+                    crypa.aead, secrets[i], secret_len, enc_sess->esi_dir[i]))
+            goto err;
+    }
+
+    if (enc_sess->esi_flags & ESI_LOG_SECRETS)
+        log_crypto_pair(enc_sess, pair, "new");
+
+    pair->ykp_enc_level  = enc_level;
+    pair->ykp_pn         = crypa.pn;
+    pair->ykp_encrypt_pn = crypa.enc_pn_f;
+    pair->ykp_decrypt_pn = crypa.dec_pn_f;
+    enc_sess->esi_crypto_pair[enc_level] = pair;
     return 1;
+
+  err:
+    cleanup_crypto_ctx(&pair->ykp_ctx[0]);
+    cleanup_crypto_ctx(&pair->ykp_ctx[1]);
+    free(pair);
+    return 0;
+#undef hexbuf
 }
 
 
 static int
 cry_sm_write_message (SSL *ssl, enum ssl_encryption_level_t level,
-                                                uint8_t *data, size_t len)
+                                            const uint8_t *data, size_t len)
 {
     struct enc_sess_iquic *enc_sess;
     void *stream;
@@ -1231,12 +1209,12 @@ cry_sm_send_alert (SSL *ssl, enum ssl_encryption_level_t level, uint8_t alert)
 }
 
 
-static const SSL_STREAM_METHOD cry_stream_method =
+static const SSL_QUIC_METHOD cry_quic_method =
 {
-    cry_sm_set_encryption_secret,
-    cry_sm_write_message,
-    cry_sm_flush_flight,
-    cry_sm_send_alert,
+    .set_encryption_secrets = cry_sm_set_encryption_secret,
+    .add_handshake_data     = cry_sm_write_message,
+    .flush_flight           = cry_sm_flush_flight,
+    .send_alert             = cry_sm_send_alert,
 };
 
 
@@ -1257,12 +1235,6 @@ chsk_ietf_on_new_stream (void *stream_if_ctx, struct lsquic_stream *stream)
         0 != init_client(enc_sess))
     {
         LSQ_DEBUG("enc session could not initialized");
-        goto end;
-    }
-
-    if (!(SSL_set_custom_stream_method(enc_sess->esi_ssl, &cry_stream_method)))
-    {
-        LSQ_INFO("could not set stream method");
         goto end;
     }
 
@@ -1333,7 +1305,7 @@ readf_cb (void *ctx, const unsigned char *buf, size_t len, int fin)
     struct enc_sess_iquic *const enc_sess = readf_ctx->enc_sess;
     int s;
 
-    s = SSL_provide_data(enc_sess->esi_ssl,
+    s = SSL_provide_quic_data(enc_sess->esi_ssl,
                 (enum ssl_encryption_level_t) readf_ctx->enc_level, buf, len);
     if (s)
     {
@@ -1343,7 +1315,7 @@ readf_cb (void *ctx, const unsigned char *buf, size_t len, int fin)
     }
     else
     {
-        LSQ_INFO("SSL provide data returned false");
+        LSQ_INFO("SSL_provide_quic_data returned false");
         readf_ctx->err++;
         return 0;
     }

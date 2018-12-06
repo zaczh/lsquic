@@ -1344,7 +1344,7 @@ id15_calc_packno_bits (lsquic_packno_t packno,
 
 
 static int
-id15_parse_max_data (const unsigned char *buf, size_t len, uint64_t *val)
+id15_parse_one_varint (const unsigned char *buf, size_t len, uint64_t *val)
 {
     int s;
 
@@ -1353,6 +1353,67 @@ id15_parse_max_data (const unsigned char *buf, size_t len, uint64_t *val)
         return 1 + s;
     else
         return s;
+}
+
+
+static int
+id15_gen_one_varint (unsigned char *buf, size_t len,
+                                        unsigned char type, uint64_t val)
+{
+    unsigned vbits;
+    unsigned char *p;
+
+    vbits = vint_val2bits(val);
+
+    if (1u + (1u << vbits) > len)
+        return -1;
+
+    p = buf;
+    *p++ = type;
+    vint_write(p, val, vbits, 1 << vbits);
+    p += 1 << vbits;
+
+    return p - buf;
+}
+
+
+/* Size of a frame that contains one varint */
+static unsigned
+id15_one_varint_size (uint64_t val)
+{
+    unsigned vbits;
+
+    vbits = vint_val2bits(val);
+    return 1u + (1u << vbits);
+}
+
+
+static int
+id15_parse_max_data (const unsigned char *buf, size_t len, uint64_t *val)
+{
+    return id15_parse_one_varint(buf, len, val);
+}
+
+
+static int
+id15_parse_retire_cid_frame (const unsigned char *buf, size_t len,
+                                                                uint64_t *val)
+{
+    return id15_parse_one_varint(buf, len, val);
+}
+
+
+static int
+id15_gen_retire_cid_frame (unsigned char *buf, size_t len, uint64_t val)
+{
+    return id15_gen_one_varint(buf, len, 0x1B, val);
+}
+
+
+static size_t
+id15_retire_cid_frame_size (uint64_t val)
+{
+    return id15_one_varint_size(val);
 }
 
 
@@ -1585,4 +1646,7 @@ const struct parse_funcs lsquic_parse_funcs_id15 =
     .pf_parse_new_token_frame         =  id15_parse_new_token_frame,
     .pf_new_connection_id_frame_size  =  id15_new_connection_id_frame_size,
     .pf_gen_new_connection_id_frame   =  id15_gen_new_connection_id_frame,
+    .pf_parse_retire_cid_frame        =  id15_parse_retire_cid_frame,
+    .pf_gen_retire_cid_frame          =  id15_gen_retire_cid_frame,
+    .pf_retire_cid_frame_size         =  id15_retire_cid_frame_size,
 };

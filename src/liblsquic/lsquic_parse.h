@@ -240,6 +240,12 @@ struct parse_funcs
     (*pf_gen_new_connection_id_frame) (unsigned char *buf, size_t,
                 unsigned seqno, const struct lsquic_cid *,
                 const unsigned char *token, size_t);
+    size_t
+    (*pf_retire_cid_frame_size) (uint64_t);
+    int
+    (*pf_gen_retire_cid_frame) (unsigned char *buf, size_t, uint64_t);
+    int
+    (*pf_parse_retire_cid_frame) (const unsigned char *buf, size_t, uint64_t *);
 };
 
 extern const struct parse_funcs lsquic_parse_funcs_gquic_le;

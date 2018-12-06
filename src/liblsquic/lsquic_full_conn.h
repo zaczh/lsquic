@@ -23,7 +23,11 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *,
 
 struct dcid_elem
 {
+    /* de_hash_el and de_next could be made into a union if we go over
+     * 128 bytes.
+     */
     struct lsquic_hash_elem     de_hash_el;
+    TAILQ_ENTRY(dcid_elem)      de_next;
     lsquic_cid_t                de_cid;
     unsigned                    de_seqno;
     enum {
