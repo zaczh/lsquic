@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <limits.h>
 #include <time.h>
 #include <string.h>
 #include <sys/queue.h>
