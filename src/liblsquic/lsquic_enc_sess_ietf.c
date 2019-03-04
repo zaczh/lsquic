@@ -73,6 +73,7 @@ static const struct alpn_map {
     const unsigned char *alpn;
 } s_alpns[] = {
     {   LSQVER_ID18, (unsigned char *) "\x05h3-18",     },
+    {   LSQVER_VERNEG, (unsigned char *) "\x05h3-18",     },
 };
 
 struct enc_sess_iquic;
@@ -1682,8 +1683,8 @@ chsk_ietf_on_new_stream (void *stream_if_ctx, struct lsquic_stream *stream)
     if (
         0 != init_client(enc_sess))
     {
-        LSQ_DEBUG("enc session could not initialized");
-        goto end;
+        LSQ_WARN("enc session could not be initialized");
+        return NULL;
     }
 
     enc_sess->esi_cryst_if->csi_wantwrite(stream, 1);

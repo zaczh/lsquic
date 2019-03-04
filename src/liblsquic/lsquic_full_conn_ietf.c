@@ -651,17 +651,28 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *enpub,
     conn->ifc_conn.cn_esf_c = select_esf_common_by_ver(ver);
     conn->ifc_conn.cn_esf.i = esfi;
     conn->ifc_conn.cn_enc_session =
-    /* TODO: check retval */
             conn->ifc_conn.cn_esf.i->esfi_create_client(hostname,
                 conn->ifc_enpub, &conn->ifc_conn, &conn->ifc_ver_neg,
                 (void **) conn->ifc_crypto_streams, &crypto_stream_if,
                 zero_rtt, zero_rtt_sz);
+    if (!conn->ifc_conn.cn_enc_session)
+    {
+        /* TODO: free other stuff */
+        free(conn);
+        return NULL;
+    }
 
     conn->ifc_crypto_streams[ENC_LEV_CLEAR] = lsquic_stream_new_crypto(
         ENC_LEV_CLEAR, &conn->ifc_pub, &lsquic_cry_sm_if,
         conn->ifc_conn.cn_enc_session,
         SCF_IETF|SCF_DI_AUTOSWITCH|SCF_CALL_ON_NEW|SCF_CRITICAL);
     if (!conn->ifc_crypto_streams[ENC_LEV_CLEAR])
+    {
+        /* TODO: free other stuff */
+        free(conn);
+        return NULL;
+    }
+    if (!lsquic_stream_get_ctx(conn->ifc_crypto_streams[ENC_LEV_CLEAR]))
     {
         /* TODO: free other stuff */
         free(conn);

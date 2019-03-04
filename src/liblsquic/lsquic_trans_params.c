@@ -333,9 +333,9 @@ lsquic_tp_decode (const unsigned char *const buf, size_t bufsz,
                 EXPECT_AT_LEAST(sizeof(params->tp_preferred_address.ipv6_port));
                 READ_UINT(params->tp_preferred_address.ipv6_port, 16, q, 2);
                 q += 2;
-                EXPECT_AT_LEAST(2);
-                READ_UINT(tlen, 16, q, 2);
-                q += 2;
+                EXPECT_AT_LEAST(1);
+                tlen = *q;
+                q += 1;
                 if (tlen < 4 || tlen > MAX_CID_LEN)
                 {
                     LSQ_DEBUG("preferred server address contains invalid "
