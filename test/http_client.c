@@ -178,6 +178,7 @@ struct http_client_ctx {
     char                        *hcc_zero_rtt_file_name;
 
     enum {
+        HCC_SKIP_0RTT           = (1 << 0),
         HCC_SEEN_FIN            = (1 << 1),
         HCC_ABORT_ON_INCOMPLETE = (1 << 2),
     }                            hcc_flags;
@@ -230,7 +231,8 @@ create_connections (struct http_client_ctx *client_ctx)
     FILE *file;
     unsigned char zero_rtt[0x2000];
 
-    if (client_ctx->hcc_zero_rtt_file_name)
+    if (0 == (client_ctx->hcc_flags & HCC_SKIP_0RTT)
+                                    && client_ctx->hcc_zero_rtt_file_name)
     {
         file = fopen(client_ctx->hcc_zero_rtt_file_name, "rb");
         if (!file)
@@ -361,22 +363,38 @@ http_client_on_conn_closed (lsquic_conn_t *conn)
 }
 
 
+static int
+hsk_status_ok (enum lsquic_hsk_status status)
+{
+    return status == LSQ_HSK_OK || status == LSQ_HSK_0RTT_OK;
+}
+
+
 static void
 http_client_on_hsk_done (lsquic_conn_t *conn, enum lsquic_hsk_status status)
 {
     lsquic_conn_ctx_t *conn_h = lsquic_conn_get_ctx(conn);
     struct http_client_ctx *client_ctx = conn_h->client_ctx;
 
-    if (status == LSQ_HSK_FAIL)
-        LSQ_INFO("handshake failed");
-    else
+    if (hsk_status_ok(status))
         LSQ_INFO("handshake success %s",
                                 status == LSQ_HSK_0RTT_OK ? "with 0-RTT" : "");
+    else if (status == LSQ_HSK_FAIL)
+        LSQ_INFO("handshake failed");
+    else if (status == LSQ_HSK_0RTT_FAIL)
+    {
+        LSQ_INFO("handshake failed because of 0-RTT, will retry without it");
+        client_ctx->hcc_flags |= HCC_SKIP_0RTT;
+        ++client_ctx->hcc_concurrency;
+        ++client_ctx->hcc_total_n_reqs;
+    }
+    else
+        assert(0);
 
-    if ((status != LSQ_HSK_FAIL) && s_display_cert_chain)
+    if (hsk_status_ok(status) && s_display_cert_chain)
         display_cert_chain(conn);
 
-    if (status != LSQ_HSK_FAIL)
+    if (hsk_status_ok(status))
     {
         conn_h = lsquic_conn_get_ctx(conn);
         ++s_stat_conns_ok;

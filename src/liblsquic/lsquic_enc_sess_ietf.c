@@ -36,6 +36,13 @@
 #include "lsquic_engine_public.h"
 #include "lsquic_version.h"
 #include "lsquic_ver_neg.h"
+#include "lsquic_byteswap.h"
+
+#if __GNUC__
+#   define UNLIKELY(cond) __builtin_expect(cond, 0)
+#else
+#   define UNLIKELY(cond) cond
+#endif
 
 #define LSQUIC_LOGGER_MODULE LSQLM_HANDSHAKE
 #define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(enc_sess->esi_conn)
@@ -178,12 +185,12 @@ struct enc_sess_iquic
     }                    esi_flags;
     enum evp_aead_direction_t
                          esi_dir[2];        /* client, server */
-    enum header_type     esi_header_type;
     enum enc_level       esi_last_w;
     char                *esi_hostname;
     void                *esi_keylog_handle;
     const unsigned char *esi_alpn;
-    SSL_SESSION         *esi_new_session;
+    unsigned char       *esi_zero_rtt_buf;
+    size_t               esi_zero_rtt_sz;
 };
 
 
@@ -383,11 +390,115 @@ generate_cid (lsquic_cid_t *cid, int len)
 }
 
 
+/*
+ * Format:
+ *      uint32_t    lsquic_ver_tag_t
+ *      uint32_t    encoder version
+ *      uint32_t    ticket_size
+ *      uint8_t     ticket_buf[ ticket_size ]
+ *      uint32_t    trapa_size
+ *      uint8_t     trapa_buf[ trapa_size ]
+ */
+
+#define ZERO_RTT_VERSION 1
+
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+#define READ_NUM(var_, ptr_) do {                               \
+    memcpy(&var_, ptr_, sizeof(var_));                          \
+    var_ = bswap_32(var_);                                      \
+    ptr_ += sizeof(var_);                                       \
+} while (0)
+#else
+#define READ_NUM(var_, ptr_) do {                               \
+    memcpy(&var_, ptr_, sizeof(var_));                          \
+    ptr_ += sizeof(var_);                                       \
+} while (0)
+#endif
+
+static SSL_SESSION *
+maybe_create_SSL_SESSION (struct enc_sess_iquic *enc_sess,
+                                                    const SSL_CTX *ssl_ctx)
+{
+    SSL_SESSION *ssl_session;
+    lsquic_ver_tag_t ver_tag;
+    enum lsquic_version quic_ver;
+    uint32_t rtt_ver, ticket_sz, trapa_sz;
+    const unsigned char *ticket_buf, *trapa_buf, *p;
+    const unsigned char *const end
+                    = enc_sess->esi_zero_rtt_buf + enc_sess->esi_zero_rtt_sz;
+
+    if (enc_sess->esi_zero_rtt_sz
+                    < sizeof(ver_tag) + sizeof(rtt_ver) + sizeof(ticket_sz))
+    {
+        LSQ_DEBUG("rtt buf too short");
+        return NULL;
+    }
+
+    p = enc_sess->esi_zero_rtt_buf;
+    memcpy(&ver_tag, p, sizeof(ver_tag));
+    p += sizeof(ver_tag);
+    quic_ver = lsquic_tag2ver(ver_tag);
+    if (quic_ver != enc_sess->esi_ver_neg->vn_ver)
+    {
+        LSQ_DEBUG("negotiated version %s does not match that in the zero-rtt "
+            "info buffer", lsquic_ver2str[enc_sess->esi_ver_neg->vn_ver]);
+        return NULL;
+    }
+
+    READ_NUM(rtt_ver, p);
+    if (rtt_ver != ZERO_RTT_VERSION)
+    {
+        LSQ_DEBUG("cannot use zero-rtt buffer: encoded using %"PRIu32", "
+                "while current version is %u", rtt_ver, ZERO_RTT_VERSION);
+        return NULL;
+    }
+
+    READ_NUM(ticket_sz, p);
+    if (p + ticket_sz > end)
+    {
+        LSQ_WARN("truncated ticket buffer");
+        return NULL;
+    }
+
+    ticket_buf = p;
+    p += ticket_sz;
+
+    if (p + sizeof(trapa_sz) > end)
+    {
+        LSQ_WARN("too short to read trapa size");
+        return NULL;
+    }
+
+    READ_NUM(trapa_sz, p);
+    if (p + trapa_sz > end)
+    {
+        LSQ_WARN("truncated trapa buffer");
+        return NULL;
+    }
+    trapa_buf = p;
+    p += trapa_sz;
+    assert(p == end);
+
+    (void) /* TODO */ trapa_buf;
+
+    ssl_session = SSL_SESSION_from_bytes(ticket_buf, ticket_sz, ssl_ctx);
+    if (!ssl_session)
+    {
+        LSQ_WARN("SSL_SESSION could not be parsed out");
+        return NULL;
+    }
+
+    LSQ_INFO("instantiated SSL_SESSION from serialized buffer");
+    return ssl_session;
+}
+
+
 static enc_session_t *
 iquic_esfi_create_client (const char *hostname,
             struct lsquic_engine_public *enpub, struct lsquic_conn *lconn,
             const struct ver_neg *ver_neg, void *crypto_streams[4],
-            const struct crypto_stream_if *cryst_if)
+            const struct crypto_stream_if *cryst_if,
+            const unsigned char *zero_rtt, size_t zero_rtt_sz)
 {
     struct enc_sess_iquic *enc_sess;
 
@@ -416,7 +527,6 @@ iquic_esfi_create_client (const char *hostname,
 
     enc_sess->esi_dir[0] = evp_aead_seal;
     enc_sess->esi_dir[1] = evp_aead_open;
-    enc_sess->esi_header_type = HETY_INITIAL;
 
     LSQ_DEBUGC("created client, DCID: %"CID_FMT, CID_BITS(&lconn->cn_dcid));
     {
@@ -434,6 +544,26 @@ iquic_esfi_create_client (const char *hostname,
     {
         free(enc_sess);
         return NULL;
+    }
+
+    /* Have to wait until the call to init_client() -- this is when the
+     * result of version negotiation is known.
+     */
+    if (zero_rtt && zero_rtt_sz)
+    {
+        enc_sess->esi_zero_rtt_buf = malloc(zero_rtt_sz);
+        if (enc_sess->esi_zero_rtt_buf)
+        {
+            memcpy(enc_sess->esi_zero_rtt_buf, zero_rtt, zero_rtt_sz);
+            enc_sess->esi_zero_rtt_sz = zero_rtt_sz;
+        }
+        else
+            enc_sess->esi_zero_rtt_sz = 0;
+    }
+    else
+    {
+        enc_sess->esi_zero_rtt_buf = NULL;
+        enc_sess->esi_zero_rtt_sz = 0;
     }
 
     return enc_sess;
@@ -552,26 +682,98 @@ maybe_setup_key_logging (struct enc_sess_iquic *enc_sess)
 }
 
 
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+#define WRITE_NUM(var_, val_, ptr_) do {                        \
+    var_ = (val_);                                              \
+    var_ = bswap_32(var_);                                      \
+    memcpy((ptr_), &var_, sizeof(var_));                        \
+    ptr_ += sizeof(var_);                                       \
+} while (0)
+#else
+#define WRITE_NUM(var_, val_, ptr_) do {                        \
+    var_ = (val_);                                              \
+    memcpy((ptr_), &var_, sizeof(var_));                        \
+    ptr_ += sizeof(var_);                                       \
+} while (0)
+#endif
+
 static int
 iquic_new_session_cb (SSL *ssl, SSL_SESSION *session)
 {
     struct enc_sess_iquic *enc_sess;
-    uint32_t max_early_data_size;
+    uint32_t max_early_data_size, num;
+    unsigned char *p, *buf;
+    uint8_t *ticket_buf;
+    size_t ticket_sz;
+    lsquic_ver_tag_t tag;
+    const uint8_t *trapa_buf;
+    size_t trapa_sz, buf_sz;
 
     enc_sess = SSL_get_ex_data(ssl, s_idx);
-    if (enc_sess->esi_new_session)
-    {
-        LSQ_DEBUG("already have new session ticket, ignoring another one");
-        return 0;
-    }
+    assert(enc_sess->esi_enpub->enp_stream_if->on_zero_rtt_info);
 
     max_early_data_size = SSL_SESSION_get_max_early_data_size(session);
     if (0xFFFFFFFFu != max_early_data_size)
         LSQ_WARN("max_early_data_size=0x%X, protocol violation",
                                                         max_early_data_size);
-    LSQ_DEBUG("take reference to new session ticket");
-    enc_sess->esi_new_session = session;
-    return 1;
+
+    SSL_get_peer_quic_transport_params(enc_sess->esi_ssl, &trapa_buf,
+                                                                &trapa_sz);
+    if (!(trapa_buf + trapa_sz))
+    {
+        LSQ_WARN("no transport parameters: cannot generate zero-rtt info");
+        return 0;
+    }
+    if (trapa_sz > UINT32_MAX)
+    {
+        LSQ_WARN("trapa size too large: %zu", trapa_sz);
+        return 0;
+    }
+
+    if (!SSL_SESSION_to_bytes(session, &ticket_buf, &ticket_sz))
+    {
+        LSQ_INFO("could not serialize new session");
+        return 0;
+    }
+    if (ticket_sz > UINT32_MAX)
+    {
+        LSQ_WARN("ticket size too large: %zu", ticket_sz);
+        OPENSSL_free(ticket_buf);
+        return 0;
+    }
+
+    buf_sz = sizeof(tag) + sizeof(uint32_t) + sizeof(uint32_t)
+                                + ticket_sz + sizeof(uint32_t) + trapa_sz;
+    buf = malloc(buf_sz);
+    if (!buf)
+    {
+        OPENSSL_free(ticket_buf);
+        LSQ_WARN("%s: malloc failed", __func__);
+        return 0;
+    }
+
+    p = buf;
+    tag = lsquic_ver2tag(enc_sess->esi_conn->cn_version);
+    memcpy(p, &tag, sizeof(tag));
+    p += sizeof(tag);
+
+    WRITE_NUM(num, ZERO_RTT_VERSION, p);
+    WRITE_NUM(num, ticket_sz, p);
+    memcpy(p, ticket_buf, ticket_sz);
+    p += ticket_sz;
+    WRITE_NUM(num, trapa_sz, p);
+    memcpy(p, trapa_buf, trapa_sz);
+    p += trapa_sz;
+
+    assert(buf + buf_sz == p);
+    OPENSSL_free(ticket_buf);
+
+    LSQ_DEBUG("generated %zu bytes of zero-rtt buffer", buf_sz);
+
+    enc_sess->esi_enpub->enp_stream_if->on_zero_rtt_info(enc_sess->esi_conn,
+                                                                buf, buf_sz);
+    free(buf);
+    return 0;
 }
 
 
@@ -579,6 +781,7 @@ static int
 init_client (struct enc_sess_iquic *const enc_sess)
 {
     SSL_CTX *ssl_ctx;
+    SSL_SESSION *ssl_session;
     const struct alpn_map *am;
     int transpa_len;
     char errbuf[ERR_ERROR_STRING_BUF_LEN];
@@ -607,7 +810,8 @@ init_client (struct enc_sess_iquic *const enc_sess)
     SSL_CTX_set_max_proto_version(ssl_ctx, TLS1_3_VERSION);
     SSL_CTX_set_default_verify_paths(ssl_ctx);
     SSL_CTX_set_session_cache_mode(ssl_ctx, SSL_SESS_CACHE_CLIENT);
-    SSL_CTX_sess_set_new_cb(ssl_ctx, iquic_new_session_cb);
+    if (enc_sess->esi_enpub->enp_stream_if->on_zero_rtt_info)
+        SSL_CTX_sess_set_new_cb(ssl_ctx, iquic_new_session_cb);
     if (enc_sess->esi_enpub->enp_kli)
         SSL_CTX_set_keylog_callback(ssl_ctx, keylog_callback);
     SSL_CTX_set_early_data_enabled(ssl_ctx, 1);
@@ -656,6 +860,15 @@ init_client (struct enc_sess_iquic *const enc_sess)
     }
     free(enc_sess->esi_hostname);
     enc_sess->esi_hostname = NULL;
+    if (enc_sess->esi_zero_rtt_buf)
+    {
+        ssl_session = maybe_create_SSL_SESSION(enc_sess, ssl_ctx);
+        if (ssl_session)
+        {
+            if (!SSL_set_session(enc_sess->esi_ssl, ssl_session))
+                LSQ_WARN("cannot set session");
+        }
+    }
 
     SSL_set_ex_data(enc_sess->esi_ssl, s_idx, enc_sess);
     SSL_set_connect_state(enc_sess->esi_ssl);
@@ -758,9 +971,10 @@ iquic_esfi_get_ssl (enc_session_t *enc_session_p)
 static enum iquic_handshake_status
 iquic_esfi_handshake (struct enc_sess_iquic *enc_sess)
 {
-    int s, err;
+    int s, err, have_alpn;
     const unsigned char *alpn;
     unsigned alpn_len;
+    enum lsquic_hsk_status hsk_err;
     char errbuf[ERR_ERROR_STRING_BUF_LEN];
 
     s = SSL_do_handshake(enc_sess->esi_ssl);
@@ -775,31 +989,42 @@ iquic_esfi_handshake (struct enc_sess_iquic *enc_sess)
         case SSL_ERROR_WANT_WRITE:
             LSQ_DEBUG("retry write");
             return IHS_WANT_WRITE;
+        case SSL_EARLY_DATA_REJECTED:   /* XXX should this be included here? */
+        case SSL_ERROR_EARLY_DATA_REJECTED:
+            LSQ_DEBUG("early data rejected");
+            hsk_err = LSQ_HSK_0RTT_FAIL;
+            goto err;
         default:
             LSQ_DEBUG("handshake: %s", ERR_error_string(err, errbuf));
+            hsk_err = LSQ_HSK_FAIL;
             goto err;
         }
     }
 
-    LSQ_DEBUG("handshake reported complete");
-    SSL_get0_alpn_selected(enc_sess->esi_ssl, &alpn, &alpn_len);
-    if (alpn && alpn_len == enc_sess->esi_alpn[0]
-                    && 0 == memcmp(alpn, enc_sess->esi_alpn + 1, alpn_len))
-        LSQ_DEBUG("Selected ALPN %.*s", (int) alpn_len, (char *) alpn);
-    else
+    if (SSL_in_early_data(enc_sess->esi_ssl))
     {
-        LSQ_INFO("No ALPN is selected");
+        LSQ_DEBUG("in early data");
+            return IHS_WANT_READ;
     }
 
-    enc_sess->esi_header_type = HETY_HANDSHAKE;
+    LSQ_DEBUG("handshake reported complete");
+    SSL_get0_alpn_selected(enc_sess->esi_ssl, &alpn, &alpn_len);
+    have_alpn = alpn && alpn_len == enc_sess->esi_alpn[0]
+                        && 0 == memcmp(alpn, enc_sess->esi_alpn + 1, alpn_len);
+    if (have_alpn)
+        LSQ_DEBUG("Selected ALPN %.*s", (int) alpn_len, (char *) alpn);
+    else
+        LSQ_INFO("No ALPN is selected");
+
     enc_sess->esi_flags |= ESI_HANDSHAKE_OK;
     enc_sess->esi_conn->cn_if->ci_hsk_done(enc_sess->esi_conn, LSQ_HSK_OK);
+
 
     return IHS_STOP;    /* XXX: what else can come on the crypto stream? */
 
   err:
     LSQ_DEBUG("handshake failed");
-    enc_sess->esi_conn->cn_if->ci_hsk_done(enc_sess->esi_conn, LSQ_HSK_FAIL);
+    enc_sess->esi_conn->cn_if->ci_hsk_done(enc_sess->esi_conn, hsk_err);
     return IHS_STOP;
 }
 
@@ -879,10 +1104,9 @@ iquic_esfi_destroy (enc_session_t *enc_session_p)
     LSQ_DEBUG("destroy");
     if (enc_sess->esi_keylog_handle)
         enc_sess->esi_enpub->enp_kli->kli_close(enc_sess->esi_keylog_handle);
-    if (enc_sess->esi_new_session)
-        SSL_SESSION_free(enc_sess->esi_new_session);
     if (enc_sess->esi_ssl)
         SSL_free(enc_sess->esi_ssl);
+    free(enc_sess->esi_zero_rtt_buf);
     free(enc_sess->esi_hostname);
     free(enc_sess);
 }
@@ -962,6 +1186,13 @@ iquic_esf_encrypt_packet (enc_session_t *enc_session_p,
     }
 
     crypto_ctx = &pair->ykp_ctx[ 0 ];
+
+    if (UNLIKELY(0 == (crypto_ctx->yk_flags & YK_INITED)))
+    {
+        LSQ_WARN("encrypt crypto context at level %s not initialized",
+                                                lsquic_enclev2str[enc_level]);
+        return -1;
+    }
 
     /* Align nonce so we can perform XOR safely in one shot: */
     begin_xor = nonce_buf + sizeof(nonce_buf) - 8;
@@ -1062,6 +1293,13 @@ iquic_esf_decrypt_packet (enc_session_t *enc_session_p,
     }
 
     crypto_ctx = &pair->ykp_ctx[ 1 ];
+
+    if (UNLIKELY(0 == (crypto_ctx->yk_flags & YK_INITED)))
+    {
+        LSQ_WARN("decrypt crypto context at level %s not initialized",
+                                                lsquic_enclev2str[enc_level]);
+        return -1;
+    }
 
     /* Decrypt packet number.  After this operation, packet_in is adjusted:
      * the packet number becomes part of the header.
@@ -1230,51 +1468,6 @@ iquic_esfi_add_scid (const struct lsquic_engine_public *enpub,
 }
 
 
-static ssize_t
-iquic_esf_get_zero_rtt (enc_session_t *enc_session_p, enum lsquic_version ver,
-                            void *buf, size_t bufsz)
-{
-    struct enc_sess_iquic *const enc_sess = enc_session_p;
-    unsigned char *p;
-    uint8_t *bytes;
-    size_t bytes_size;
-    lsquic_ver_tag_t tag;
-
-    if (!enc_sess->esi_new_session)
-    {
-        LSQ_DEBUG("no new session ticket available, no zero-rtt");
-        return 0;
-    }
-
-    if (!SSL_SESSION_to_bytes(enc_sess->esi_new_session, &bytes, &bytes_size))
-    {
-        LSQ_INFO("could not serialize new session");
-        return -1;
-    }
-
-    if (sizeof(tag) + bytes_size > bufsz)
-    {
-        OPENSSL_free(bytes);
-        LSQ_DEBUG("not enough room to store zero-rtt buffer");
-        errno = ENOBUFS;
-        return -1;
-    }
-
-    p = buf;
-    tag = lsquic_ver2tag(enc_sess->esi_conn->cn_version);
-    memcpy(p, &tag, sizeof(tag));
-    p += sizeof(tag);
-    memcpy(p, bytes, bytes_size);
-    p += bytes_size;
-
-    OPENSSL_free(bytes);
-
-    LSQ_DEBUG("generated %"PRIiPTR" bytes of zero-rtt buffer",
-                                                p - (unsigned char *) buf);
-    return p - (unsigned char *) buf;
-}
-
-
 int
 iquic_esfi_reset_dcid (enc_session_t *enc_session_p, const lsquic_cid_t *dcid)
 {
@@ -1313,7 +1506,6 @@ const struct enc_session_funcs_common lsquic_enc_session_common_id18 =
     .esf_global_cleanup  = iquic_esf_global_cleanup,
     .esf_global_init     = iquic_esf_global_init,
     .esf_tag_len         = IQUIC_TAG_LEN,
-    .esf_get_zero_rtt    = iquic_esf_get_zero_rtt,
     .esf_get_server_cert_chain
                          = iquic_esf_get_server_cert_chain,
 };
@@ -1352,7 +1544,10 @@ cry_sm_set_encryption_secret (SSL *ssl, enum ssl_encryption_level_t level,
     if (0 != get_crypto_params(enc_sess, &crypa))
         return 0;
 
+    if (enc_level != ENC_LEV_EARLY)
         secrets[0] = write_secret, secrets[1] = read_secret;
+    else
+        secrets[1] = write_secret, secrets[0] = read_secret;
 
     pair = calloc(1, sizeof(*pair));
     if (!pair)
@@ -1361,12 +1556,17 @@ cry_sm_set_encryption_secret (SSL *ssl, enum ssl_encryption_level_t level,
     LSQ_DEBUG("set encryption for level %u", enc_level);
     for (i = 1; i >= 0; --i)
     {
-        if (enc_sess->esi_flags & ESI_LOG_SECRETS)
-            LSQ_DEBUG("new %s secret: %s", i ? "server" : "client",
-                                HEXSTR(secrets[i], secret_len, hexbuf));
-        if (0 != init_crypto_ctx(&pair->ykp_ctx[i], crypa.md,
-                    crypa.aead, secrets[i], secret_len, enc_sess->esi_dir[i]))
-            goto err;
+        if (secrets[i])
+        {
+            if (enc_sess->esi_flags & ESI_LOG_SECRETS)
+                LSQ_DEBUG("new %s secret: %s", i ? "server" : "client",
+                                    HEXSTR(secrets[i], secret_len, hexbuf));
+            if (0 != init_crypto_ctx(&pair->ykp_ctx[i], crypa.md,
+                        crypa.aead, secrets[i], secret_len, enc_sess->esi_dir[i]))
+                goto err;
+        }
+        else
+            assert(level == ssl_encryption_early_data);
     }
 
     if (enc_sess->esi_flags & ESI_LOG_SECRETS)

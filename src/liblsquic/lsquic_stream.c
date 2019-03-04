@@ -376,6 +376,7 @@ lsquic_stream_t *
 lsquic_stream_new (lsquic_stream_id_t id,
         struct lsquic_conn_public *conn_pub,
         const struct lsquic_stream_if *stream_if, void *stream_if_ctx,
+        /* TODO: these should be uint64_t now */
         unsigned initial_window, unsigned initial_send_off,
         enum stream_ctor_flags ctor_flags)
 {
@@ -3055,9 +3056,9 @@ lsquic_stream_window_update (lsquic_stream_t *stream, uint64_t offset)
  * learn of peer's limits from the handshake values.
  */
 int
-lsquic_stream_set_max_send_off (lsquic_stream_t *stream, unsigned offset)
+lsquic_stream_set_max_send_off (lsquic_stream_t *stream, uint64_t offset)
 {
-    LSQ_DEBUG("setting max_send_off to %u", offset);
+    LSQ_DEBUG("setting max_send_off to %"PRIu64, offset);
     if (offset > stream->max_send_off)
     {
         lsquic_stream_window_update(stream, offset);
@@ -3065,8 +3066,8 @@ lsquic_stream_set_max_send_off (lsquic_stream_t *stream, unsigned offset)
     }
     else if (offset < stream->tosend_off)
     {
-        LSQ_INFO("new offset (%u bytes) is smaller than the amount of data "
-            "already sent on this stream (%"PRIu64" bytes)", offset,
+        LSQ_INFO("new offset (%"PRIu64" bytes) is smaller than the amount of "
+            "data already sent on this stream (%"PRIu64" bytes)", offset,
             stream->tosend_off);
         return -1;
     }

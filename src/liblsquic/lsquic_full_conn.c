@@ -527,9 +527,7 @@ static const struct conn_iface *full_conn_iface_ptr;
 
 static struct full_conn *
 new_conn_common (lsquic_cid_t cid, struct lsquic_engine_public *enpub,
-                 const struct lsquic_stream_if *stream_if,
-                 void *stream_if_ctx, unsigned flags,
-                 unsigned short max_packet_size)
+                 unsigned flags, unsigned short max_packet_size)
 {
     struct full_conn *conn;
     lsquic_stream_t *headers_stream;
@@ -557,8 +555,8 @@ new_conn_common (lsquic_cid_t cid, struct lsquic_engine_public *enpub,
 #endif
     conn->fc_pub.packet_out_malo =
                         lsquic_malo_create(sizeof(struct lsquic_packet_out));
-    conn->fc_stream_ifs[STREAM_IF_STD].stream_if     = stream_if;
-    conn->fc_stream_ifs[STREAM_IF_STD].stream_if_ctx = stream_if_ctx;
+    conn->fc_stream_ifs[STREAM_IF_STD].stream_if     = enpub->enp_stream_if;
+    conn->fc_stream_ifs[STREAM_IF_STD].stream_if_ctx = enpub->enp_stream_if_ctx;
     conn->fc_settings = &enpub->enp_settings;
     /* Calculate maximum number of incoming streams using the same mechanism
      * and parameters as found in Chrome:
@@ -618,8 +616,8 @@ new_conn_common (lsquic_cid_t cid, struct lsquic_engine_public *enpub,
     }
     else
     {
-        conn->fc_stream_ifs[STREAM_IF_HDR].stream_if     = stream_if;
-        conn->fc_stream_ifs[STREAM_IF_HDR].stream_if_ctx = stream_if_ctx;
+        conn->fc_stream_ifs[STREAM_IF_HDR].stream_if     = enpub->enp_stream_if;
+        conn->fc_stream_ifs[STREAM_IF_HDR].stream_if_ctx = enpub->enp_stream_if_ctx;
     }
     if (conn->fc_settings->es_support_push)
         conn->fc_flags |= FC_SUPPORT_PUSH;
@@ -649,8 +647,7 @@ new_conn_common (lsquic_cid_t cid, struct lsquic_engine_public *enpub,
 
 struct lsquic_conn *
 lsquic_gquic_full_conn_client_new (struct lsquic_engine_public *enpub,
-                      const struct lsquic_stream_if *stream_if,
-                      void *stream_if_ctx, unsigned flags,
+                      unsigned flags,
                       const char *hostname, unsigned short max_packet_size,
                       int is_ipv4,
                       const unsigned char *zero_rtt, size_t zero_rtt_len)
@@ -677,8 +674,7 @@ lsquic_gquic_full_conn_client_new (struct lsquic_engine_public *enpub,
         else
             max_packet_size = GQUIC_MAX_IPv6_PACKET_SZ;
     }
-    conn = new_conn_common(cid, enpub, stream_if, stream_if_ctx, flags,
-                                                            max_packet_size);
+    conn = new_conn_common(cid, enpub, flags, max_packet_size);
     if (!conn)
         return NULL;
     conn->fc_conn.cn_esf_c = select_esf_common_by_ver(version);
@@ -2688,7 +2684,8 @@ process_streams_write_events (struct full_conn *conn, int high_prio)
 
     for (stream = lsquic_spi_first(&spi); stream && write_is_possible(conn);
                                             stream = lsquic_spi_next(&spi))
-        lsquic_stream_dispatch_write_events(stream);
+        if (stream->sm_qflags & SMQF_WRITE_Q_FLAGS)
+            lsquic_stream_dispatch_write_events(stream);
 
     maybe_conn_flush_headers_stream(conn);
 }
@@ -3198,6 +3195,7 @@ full_conn_ci_hsk_done (lsquic_conn_t *lconn, enum lsquic_hsk_status status)
     lsquic_alarmset_unset(&conn->fc_alset, AL_HANDSHAKE);
     switch (status)
     {
+        case LSQ_HSK_0RTT_FAIL:
         case LSQ_HSK_FAIL:
             conn->fc_flags |= FC_HSK_FAILED;
             break;

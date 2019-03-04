@@ -370,7 +370,7 @@ void
 lsquic_stream_window_update (lsquic_stream_t *stream, uint64_t offset);
 
 int
-lsquic_stream_set_max_send_off (lsquic_stream_t *stream, unsigned offset);
+lsquic_stream_set_max_send_off (lsquic_stream_t *stream, uint64_t offset);
 
 /* The caller should only call this function if SMQF_SEND_WUF is set and
  * it must generate a window update frame using this value.

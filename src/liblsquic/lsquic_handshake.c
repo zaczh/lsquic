@@ -2177,18 +2177,3 @@ struct enc_session_funcs_gquic lsquic_enc_session_gquic_gquic_1 =
     .esf_mem_used = lsquic_enc_session_mem_used,
     .esf_maybe_dispatch_zero_rtt = maybe_dispatch_zero_rtt,
 };
-
-
-enum lsquic_version
-lsquic_zero_rtt_version (const unsigned char *buf, size_t bufsz)
-{
-    lsquic_ver_tag_t tag;
-
-    if (bufsz >= sizeof(tag))
-    {
-        memcpy(&tag, buf, sizeof(tag));
-        return lsquic_tag2ver(tag);
-    }
-    else
-        return -1;
-}

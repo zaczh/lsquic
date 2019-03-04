@@ -101,10 +101,6 @@ struct enc_session_funcs_common
     int
     (*esf_verify_reset_token) (enc_session_t *, const unsigned char *, size_t);
 
-    ssize_t
-    (*esf_get_zero_rtt) (enc_session_t *, enum lsquic_version,
-                                                            void *, size_t);
-
     int
     (*esf_did_zero_rtt_succeed) (enc_session_t *);
 
@@ -195,7 +191,8 @@ struct enc_session_funcs_iquic
     (*esfi_create_client) (const char *domain, struct lsquic_engine_public *,
                            struct lsquic_conn *, const struct ver_neg *,
                            void *(crypto_streams)[4],
-                           const struct crypto_stream_if *);
+                           const struct crypto_stream_if *,
+                           const unsigned char *, size_t);
 
     void
     (*esfi_destroy) (enc_session_t *);
@@ -244,5 +241,8 @@ extern const struct lsquic_stream_if lsquic_cry_sm_if;
 
 /* RFC 7301, Section 3.2 */
 #define ALERT_NO_APPLICATION_PROTOCOL 120
+
+enum lsquic_version
+lsquic_zero_rtt_version (const unsigned char *, size_t);
 
 #endif

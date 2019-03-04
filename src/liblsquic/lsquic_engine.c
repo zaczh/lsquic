@@ -157,8 +157,6 @@ struct lsquic_engine
         ENG_DTOR        = (1 << 26),    /* Engine destructor */
 #endif
     }                                  flags;
-    const struct lsquic_stream_if     *stream_if;
-    void                              *stream_if_ctx;
     lsquic_packets_out_f               packets_out;
     void                              *packets_out_ctx;
     struct lsquic_hash                *conns_hash;
@@ -385,10 +383,10 @@ lsquic_engine_new (unsigned flags,
     else
         lsquic_engine_init_settings(&engine->pub.enp_settings, flags);
     engine->pub.enp_flags = ENPUB_CAN_SEND;
+    engine->pub.enp_stream_if       = api->ea_stream_if;
+    engine->pub.enp_stream_if_ctx   = api->ea_stream_if_ctx;
 
     engine->flags           = flags;
-    engine->stream_if       = api->ea_stream_if;
-    engine->stream_if_ctx   = api->ea_stream_if_ctx;
     engine->packets_out     = api->ea_packets_out;
     engine->packets_out_ctx = api->ea_packets_out_ctx;
     if (api->ea_hsi_if)
@@ -888,12 +886,11 @@ lsquic_engine_connect (lsquic_engine_t *engine, const struct sockaddr *local_sa,
     flags = engine->flags & (ENG_SERVER|ENG_HTTP);
     is_ipv4 = peer_sa->sa_family == AF_INET;
     if (engine->pub.enp_settings.es_versions & LSQUIC_IETF_VERSIONS)
-        conn = lsquic_ietf_full_conn_client_new(&engine->pub, engine->stream_if,
-                    engine->stream_if_ctx, flags, hostname, max_packet_size,
+        conn = lsquic_ietf_full_conn_client_new(&engine->pub,
+                    flags, hostname, max_packet_size,
                     is_ipv4, zero_rtt, zero_rtt_len, token, token_sz);
     else
-        conn = lsquic_gquic_full_conn_client_new(&engine->pub,
-                            engine->stream_if, engine->stream_if_ctx, flags,
+        conn = lsquic_gquic_full_conn_client_new(&engine->pub, flags,
                             hostname, max_packet_size, is_ipv4,
                             zero_rtt, zero_rtt_len);
     if (!conn)

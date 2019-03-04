@@ -217,7 +217,7 @@ struct ietf_full_conn
     uint64_t                    ifc_path_chal;
     lsquic_stream_id_t          ifc_max_peer_stream_id;
     struct {
-        uint32_t    max_stream_send;
+        uint64_t    max_stream_send;
         uint8_t     ack_exp;
     }                           ifc_cfg;
     int                       (*ifc_process_incoming_packet)(
@@ -492,8 +492,9 @@ create_bidi_stream_out (struct ietf_full_conn *conn)
     lsquic_stream_id_t stream_id;
 
     stream_id = generate_stream_id(conn, SD_BIDI);
-    stream = lsquic_stream_new(stream_id, &conn->ifc_pub, conn->ifc_stream_if,
-                conn->ifc_stream_ctx,
+    stream = lsquic_stream_new(stream_id, &conn->ifc_pub,
+                conn->ifc_enpub->enp_stream_if,
+                conn->ifc_enpub->enp_stream_if_ctx,
                 conn->ifc_settings->es_init_max_stream_data_bidi_local,
                 conn->ifc_cfg.max_stream_send, SCF_IETF
                 | (conn->ifc_flags & IFC_HTTP ? SCF_HTTP : 0));
@@ -512,14 +513,10 @@ create_bidi_stream_out (struct ietf_full_conn *conn)
 
 static int
 ietf_full_conn_init (struct ietf_full_conn *conn,
-           struct lsquic_engine_public *enpub,
-           const struct lsquic_stream_if *stream_if, void *stream_if_ctx,
-           unsigned flags)
+           struct lsquic_engine_public *enpub, unsigned flags)
 {
     if (enpub->enp_settings.es_scid_len)
         assert(CN_SCID(&conn->ifc_conn)->len);
-    conn->ifc_stream_if = stream_if;
-    conn->ifc_stream_ctx = stream_if_ctx;
     conn->ifc_enpub = enpub;
     conn->ifc_settings = &enpub->enp_settings;
     conn->ifc_pub.lconn = &conn->ifc_conn;
@@ -578,9 +575,7 @@ ietf_full_conn_init (struct ietf_full_conn *conn,
 
 struct lsquic_conn *
 lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *enpub,
-               const struct lsquic_stream_if *stream_if,
-               void *stream_if_ctx,
-               unsigned flags,
+           unsigned flags,
            const char *hostname, unsigned short max_packet_size, int is_ipv4,
            const unsigned char *zero_rtt, size_t zero_rtt_sz,
            const unsigned char *token, size_t token_sz)
@@ -588,7 +583,7 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *enpub,
     const struct enc_session_funcs_iquic *esfi;
     struct ietf_full_conn *conn;
     struct conn_cid_elem *cce;
-    enum lsquic_version ver;
+    enum lsquic_version ver, zero_rtt_version;
     unsigned versions;
 
     conn = calloc(1, sizeof(*conn));
@@ -601,6 +596,12 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *enpub,
     versions = enpub->enp_settings.es_versions & LSQUIC_IETF_VERSIONS;
     assert(versions);
     ver = highest_bit_set(versions);
+    if (zero_rtt)
+    {
+        zero_rtt_version = lsquic_zero_rtt_version(zero_rtt, zero_rtt_sz);
+        if (zero_rtt_version < N_LSQVER && ((1 << zero_rtt_version) & versions))
+            ver = zero_rtt_version;
+    }
     esfi = select_esf_iquic_by_ver(ver);
     cce = esfi->esfi_add_scid(enpub, &conn->ifc_conn);
     if (!cce)
@@ -620,7 +621,7 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *enpub,
     }
     conn->ifc_conn.cn_pack_size = max_packet_size;
 
-    if (0 != ietf_full_conn_init(conn, enpub, stream_if, stream_if_ctx, flags))
+    if (0 != ietf_full_conn_init(conn, enpub, flags))
     {
         free(conn);
         return NULL;
@@ -653,7 +654,8 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *enpub,
     /* TODO: check retval */
             conn->ifc_conn.cn_esf.i->esfi_create_client(hostname,
                 conn->ifc_enpub, &conn->ifc_conn, &conn->ifc_ver_neg,
-                (void **) conn->ifc_crypto_streams, &crypto_stream_if);
+                (void **) conn->ifc_crypto_streams, &crypto_stream_if,
+                zero_rtt, zero_rtt_sz);
 
     conn->ifc_crypto_streams[ENC_LEV_CLEAR] = lsquic_stream_new_crypto(
         ENC_LEV_CLEAR, &conn->ifc_pub, &lsquic_cry_sm_if,
@@ -1214,8 +1216,8 @@ service_streams (struct ietf_full_conn *conn)
         {
             --conn->ifc_n_delayed_streams;
             LSQ_DEBUG("goaway mode: delayed stream results in null ctor");
-            (void) conn->ifc_stream_if->on_new_stream(conn->ifc_stream_ctx,
-                                                                        NULL);
+            (void) conn->ifc_enpub->enp_stream_if->on_new_stream(
+                                    conn->ifc_enpub->enp_stream_if_ctx, NULL);
         }
     else if ((conn->ifc_flags & (IFC_HTTP|IFC_HAVE_PEER_SET)) != IFC_HTTP)
         maybe_create_delayed_streams(conn);
@@ -1295,8 +1297,8 @@ ietf_full_conn_ci_client_call_on_new (struct lsquic_conn *lconn)
 {
     struct ietf_full_conn *conn = (struct ietf_full_conn *) lconn;
     assert(conn->ifc_flags & IFC_CREATED_OK);
-    conn->ifc_conn_ctx = conn->ifc_stream_if->on_new_conn(conn->ifc_stream_ctx,
-                                                                        lconn);
+    conn->ifc_conn_ctx = conn->ifc_enpub->enp_stream_if->on_new_conn(
+                                conn->ifc_enpub->enp_stream_if_ctx, lconn);
 }
 
 
@@ -1344,7 +1346,7 @@ ietf_full_conn_ci_destroy (struct lsquic_conn *lconn)
         lsquic_malo_put(dce);
     }
     if (conn->ifc_flags & IFC_CREATED_OK)
-        conn->ifc_stream_if->on_conn_closed(&conn->ifc_conn);
+        conn->ifc_enpub->enp_stream_if->on_conn_closed(&conn->ifc_conn);
     if (conn->ifc_pub.u.ietf.prio_tree)
         lsquic_prio_tree_destroy(conn->ifc_pub.u.ietf.prio_tree);
     if (conn->ifc_conn.cn_enc_session)
@@ -1370,8 +1372,6 @@ handshake_failed (struct lsquic_conn *lconn)
     LSQ_DEBUG("handshake failed");
     lsquic_alarmset_unset(&conn->ifc_alset, AL_HANDSHAKE);
     conn->ifc_flags |= IFC_HSK_FAILED;
-    if (conn->ifc_stream_if->on_hsk_done)
-        conn->ifc_stream_if->on_hsk_done(lconn, LSQ_HSK_FAIL);
 }
 
 
@@ -1398,7 +1398,7 @@ handshake_ok (struct lsquic_conn *lconn)
     struct dcid_elem *dce;
     struct transport_params params;
     enum stream_id_type sit;
-    uint32_t limit;
+    uint64_t limit;
     char buf[0x200];
 
     /* Need to set this flag even we hit an error in the rest of this funciton.
@@ -1446,13 +1446,13 @@ handshake_ok (struct lsquic_conn *lconn)
             limit = params.tp_init_max_stream_data_bidi_local;
         if (0 != lsquic_stream_set_max_send_off(stream, limit))
         {
-            ABORT_WARN("cannot set peer-supplied max_stream_data=%"PRIu32
+            ABORT_WARN("cannot set peer-supplied max_stream_data=%"PRIu64
                 "on stream %"PRIu64, limit, stream->id);
             return -1;
         }
     }
 
-    conn->ifc_cfg.max_stream_send = params.tp_init_max_stream_data_bidi_remote;
+    conn->ifc_cfg.max_stream_send = params.tp_init_max_stream_data_bidi_local;
     conn->ifc_cfg.ack_exp = params.tp_ack_delay_exponent;
 
     /* TODO: idle timeout, packet size */
@@ -1551,15 +1551,11 @@ ietf_full_conn_ci_hsk_done (struct lsquic_conn *lconn,
     {
     case LSQ_HSK_OK:
     case LSQ_HSK_0RTT_OK:
-        if (0 == handshake_ok(lconn))
-        {
-            if (conn->ifc_stream_if->on_hsk_done)
-                conn->ifc_stream_if->on_hsk_done(lconn, status);
-        }
-        else
+        if (0 != handshake_ok(lconn))
         {
             LSQ_INFO("handshake was reported successful, but later processing "
                 "produced an error");
+            status = LSQ_HSK_FAIL;
             handshake_failed(lconn);
         }
         break;
@@ -1567,9 +1563,12 @@ ietf_full_conn_ci_hsk_done (struct lsquic_conn *lconn,
         assert(0);
         /* fall-through */
     case LSQ_HSK_FAIL:
+    case LSQ_HSK_0RTT_FAIL:
         handshake_failed(lconn);
         break;
     }
+    if (conn->ifc_enpub->enp_stream_if->on_hsk_done)
+        conn->ifc_enpub->enp_stream_if->on_hsk_done(lconn, status);
 }
 
 
@@ -1656,8 +1655,7 @@ immediate_close (struct ietf_full_conn *conn)
      */
     lsquic_send_ctl_drop_scheduled(&conn->ifc_send_ctl);
 
-    if ((conn->ifc_flags & IFC_TIMED_OUT)
-                                    && conn->ifc_settings->es_silent_close)
+    if (conn->ifc_flags & IFC_TIMED_OUT)
         return TICK_CLOSE;
 
     packet_out = lsquic_send_ctl_new_packet_out(&conn->ifc_send_ctl, 0,
@@ -1782,7 +1780,7 @@ process_crypto_stream_write_events (struct ietf_full_conn *conn)
     for (stream = conn->ifc_crypto_streams; stream <
             conn->ifc_crypto_streams + sizeof(conn->ifc_crypto_streams)
                     / sizeof(conn->ifc_crypto_streams[0]); ++stream)
-        if (*stream && (*stream)->sm_qflags & SMQF_WANT_WRITE)
+        if (*stream && (*stream)->sm_qflags & SMQF_WRITE_Q_FLAGS)
             lsquic_stream_dispatch_write_events(*stream);
 }
 
@@ -1843,7 +1841,8 @@ process_streams_write_events (struct ietf_full_conn *conn, int high_prio,
 
     while ((stream = lsquic_prio_tree_iter_next(
                                         conn->ifc_pub.u.ietf.prio_tree)))
-        lsquic_stream_dispatch_write_events(stream);
+        if (stream->sm_qflags & SMQF_WRITE_Q_FLAGS)
+            lsquic_stream_dispatch_write_events(stream);
 
     maybe_conn_flush_special_streams(conn);
 }
@@ -1853,7 +1852,13 @@ static int
 conn_ok_to_close (const struct ietf_full_conn *conn)
 {
     assert(conn->ifc_flags & IFC_CLOSING);
-    return 1;
+    return !(conn->ifc_flags & IFC_SERVER)
+        || (conn->ifc_flags & IFC_RECV_CLOSE)
+        || (
+               !lsquic_send_ctl_have_outgoing_stream_frames(&conn->ifc_send_ctl)
+            && lsquic_hash_count(conn->ifc_pub.all_streams) == 0
+            && lsquic_send_ctl_have_unacked_stream_frames(
+                                                    &conn->ifc_send_ctl) == 0);
 }
 
 
@@ -2182,8 +2187,8 @@ new_stream (struct ietf_full_conn *conn, lsquic_stream_id_t stream_id,
     }
     else
     {
-        iface = conn->ifc_stream_if;
-        stream_ctx = conn->ifc_stream_ctx;
+        iface = conn->ifc_enpub->enp_stream_if;
+        stream_ctx = conn->ifc_enpub->enp_stream_if_ctx;
         if (conn->ifc_enpub->enp_settings.es_rw_once)
             flags |= SCF_DISP_RW_ONCE;
         if (conn->ifc_flags & IFC_HTTP)
@@ -2411,6 +2416,13 @@ process_crypto_frame (struct ietf_full_conn *conn,
     enc_level = lsquic_packet_in_enc_level(packet_in);
     EV_LOG_CRYPTO_FRAME_IN(LSQUIC_LOG_CONN_ID, stream_frame, enc_level);
     LSQ_DEBUG("Got CRYPTO frame for enc level #%u", enc_level);
+    if ((conn->ifc_conn.cn_flags & LSCONN_HANDSHAKE_DONE)
+                                                && enc_level != ENC_LEV_FORW)
+    {
+        LSQ_DEBUG("handshake complete: ignore CRYPTO frames in "
+            "non-forward-secure packets");
+        return parsed_len;
+    }
 
     if (conn->ifc_flags & IFC_CLOSING)
     {
@@ -3007,9 +3019,9 @@ process_new_token_frame (struct ietf_full_conn *conn,
             free(token_str);
         }
     }
-    if (conn->ifc_stream_if->on_new_token)
-        conn->ifc_stream_if->on_new_token(conn->ifc_stream_ctx, token,
-                                                                    token_sz);
+    if (conn->ifc_enpub->enp_stream_if->on_new_token)
+        conn->ifc_enpub->enp_stream_if->on_new_token(
+                        conn->ifc_enpub->enp_stream_if_ctx, token, token_sz);
     return parsed_len;
 }
 
@@ -3795,18 +3807,10 @@ ietf_full_conn_ci_tick (struct lsquic_conn *lconn, lsquic_time_t now)
     if ((conn->ifc_flags & IFC_CLOSING) && conn_ok_to_close(conn))
     {
         LSQ_DEBUG("connection is OK to close");
-        /* This is normal termination sequence.
-         *
-         * Generate CONNECTION_CLOSE frame if we are responding to one, have
-         * packets scheduled to send, or silent close flag is not set.
-         */
         conn->ifc_flags |= IFC_TICK_CLOSE;
-        if ((conn->ifc_flags & IFC_RECV_CLOSE) ||
-                0 != lsquic_send_ctl_n_scheduled(&conn->ifc_send_ctl) ||
-                                        !conn->ifc_settings->es_silent_close)
+        if ((conn->ifc_send_flags & SF_SEND_CONN_CLOSE) )
         {
-            if (conn->ifc_send_flags & SF_SEND_CONN_CLOSE)
-                generate_connection_close_packet(conn);
+            generate_connection_close_packet(conn);
             tick |= TICK_SEND|TICK_CLOSE;
         }
         else
@@ -3976,7 +3980,8 @@ ietf_full_conn_ci_make_stream (struct lsquic_conn *lconn)
     }
     else if (either_side_going_away(conn))
     {
-        (void) conn->ifc_stream_if->on_new_stream(conn->ifc_stream_ctx, NULL);
+        (void) conn->ifc_enpub->enp_stream_if->on_new_stream(
+                                    conn->ifc_enpub->enp_stream_if_ctx, NULL);
         LSQ_DEBUG("going away: no streams will be initiated");
     }
     else

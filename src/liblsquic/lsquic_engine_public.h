@@ -11,10 +11,13 @@ struct lsquic_conn;
 struct lsquic_engine;
 struct stack_st_X509;
 struct lsquic_hash;
+struct lsquic_stream_if;
 
 struct lsquic_engine_public {
     struct lsquic_mm                enp_mm;
     struct lsquic_engine_settings   enp_settings;
+    const struct lsquic_stream_if  *enp_stream_if;
+    void                           *enp_stream_if_ctx;
     const struct lsquic_hset_if    *enp_hsi_if;
     void                           *enp_hsi_ctx;
     int                           (*enp_verify_cert)(void *verify_ctx,

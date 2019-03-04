@@ -89,7 +89,7 @@ typedef struct lsquic_packet_out
                                          */
         PO_SCHED    = (1 <<14),         /* On scheduled queue */
         PO_SENT_SZ  = (1 <<15),
-        PO_LONGHEAD = (1 <<16),
+        PO_LONGHEAD = (1 <<16),         /* Only used for Q044 */
         PO_GQUIC    = (1 <<17),         /* Used for logging */
 #define POLEV_SHIFT 18
         PO_ELBIT_0  = (1 <<18),         /* EL bits encode the crypto level. */

@@ -24,6 +24,7 @@
 
 #include <lsquic.h>
 
+
 #include "../src/liblsquic/lsquic_hash.h"
 #include "../src/liblsquic/lsquic_int_types.h"
 #include "../src/liblsquic/lsquic_util.h"
@@ -34,6 +35,7 @@
 #include "prog.h"
 
 static int prog_stopped;
+
 
 static const struct lsquic_packout_mem_if pmi = {
     .pmi_allocate = pba_allocate,

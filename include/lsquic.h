@@ -130,7 +130,7 @@ enum lsquic_version
 };
 
 /**
- * We currently support versions 35, 39, 43, 44, and IETF Draft-14
+ * We currently support versions 35, 39, 43, 44, and IETF Draft-18
  * @see lsquic_version
  */
 #define LSQUIC_SUPPORTED_VERSIONS ((1 << N_LSQVER) - 1)
@@ -164,6 +164,11 @@ enum lsquic_hsk_status
      * The handshake succeeded with 0-RTT.
      */
     LSQ_HSK_0RTT_OK,
+    /**
+     * The handshake failed because of 0-RTT (early data rejected).  Retry
+     * the connection without 0-RTT.
+     */
+    LSQ_HSK_0RTT_FAIL,
 };
 
 /**
@@ -384,7 +389,7 @@ struct lsquic_engine_settings {
      */
     unsigned long   es_handshake_to;
 
-    /** ICSL in microseconds */
+    /** ICSL in microseconds; GQUIC only */
     unsigned long   es_idle_conn_to;
 
     /** SCLS (silent close) */
