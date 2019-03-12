@@ -564,7 +564,7 @@ test_loc_FIN_rem_FIN (struct test_objs *tobjs)
     assert(!fin);
 
     /* Pretend we sent out a packet: */
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     lsquic_send_ctl_sent_packet(&tobjs->send_ctl, packet_out);
 
     s = lsquic_stream_shutdown(stream, 1);
@@ -580,7 +580,7 @@ test_loc_FIN_rem_FIN (struct test_objs *tobjs)
     assert(SSS_DATA_SENT == sss);
 
     /* Pretend we sent out this packet as well: */
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     lsquic_send_ctl_sent_packet(&tobjs->send_ctl, packet_out);
 
     assert(TAILQ_EMPTY(&tobjs->conn_pub.service_streams));  /* No need to close stream yet */
@@ -664,7 +664,7 @@ test_rem_FIN_loc_FIN (struct test_objs *tobjs)
     assert(!fin);
 
     /* Pretend we sent out a packet: */
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     lsquic_send_ctl_sent_packet(&tobjs->send_ctl, packet_out);
 
     assert(TAILQ_EMPTY(&tobjs->conn_pub.service_streams));  /* No need to close stream yet */
@@ -683,7 +683,7 @@ test_rem_FIN_loc_FIN (struct test_objs *tobjs)
     assert(fin);
 
     /* Pretend we sent out this packet as well: */
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     lsquic_send_ctl_sent_packet(&tobjs->send_ctl, packet_out);
 
     /* Cannot free stream yet: packets have not been acked */
@@ -785,7 +785,7 @@ test_loc_FIN_rem_RST (struct test_objs *tobjs)
     assert(!fin);
 
     /* Pretend we sent out a packet: */
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     lsquic_send_ctl_sent_packet(&tobjs->send_ctl, packet_out);
 
     s = lsquic_stream_shutdown(stream, 1);
@@ -799,7 +799,7 @@ test_loc_FIN_rem_RST (struct test_objs *tobjs)
     assert(fin);
 
     /* Pretend we sent out this packet as well: */
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     lsquic_send_ctl_sent_packet(&tobjs->send_ctl, packet_out);
 
     assert(TAILQ_EMPTY(&tobjs->conn_pub.service_streams));  /* No need to close stream yet */
@@ -869,7 +869,7 @@ test_loc_data_rem_RST (struct test_objs *tobjs)
     assert(!fin);
 
     /* Pretend we sent out a packet: */
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     lsquic_send_ctl_sent_packet(&tobjs->send_ctl, packet_out);
 
     s = lsquic_stream_frame_in(stream, new_frame_in(tobjs, 0, 100, 0));
@@ -940,7 +940,7 @@ test_loc_RST_rem_FIN (struct test_objs *tobjs)
     assert(!fin);
 
     /* Pretend we sent out a packet: */
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     lsquic_send_ctl_sent_packet(&tobjs->send_ctl, packet_out);
 
     assert(1 == stream->n_unacked);
@@ -1038,15 +1038,15 @@ test_gapless_elision_middle (struct test_objs *tobjs)
     assert(n == written_to_A);
     assert(0 == memcmp(buf, buf_out, written_to_A));
 
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     assert(packet_out->po_packno == 1);
     lsquic_send_ctl_sent_packet(&tobjs->send_ctl, packet_out);
 
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     assert(packet_out->po_packno == 2);
     lsquic_send_ctl_sent_packet(&tobjs->send_ctl, packet_out);
 
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     assert(!packet_out);
 
     /* Now we can call on_close: */
@@ -1109,15 +1109,15 @@ test_gapless_elision_beginning (struct test_objs *tobjs)
     assert(n == written_to_A);
     assert(0 == memcmp(buf, buf_out, written_to_A));
 
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     assert(packet_out->po_packno == 1);
     lsquic_send_ctl_sent_packet(&tobjs->send_ctl, packet_out);
 
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     assert(packet_out->po_packno == 2);
     lsquic_send_ctl_sent_packet(&tobjs->send_ctl, packet_out);
 
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs->send_ctl, 0);
     assert(!packet_out);
 
     /* Now we can call on_close: */
@@ -2118,7 +2118,7 @@ test_window_update1 (void)
     assert(0 == memcmp(buf, "123", 3));
 
     /* Pretend we sent out a packet: */
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl, 0);
     lsquic_send_ctl_sent_packet(&tobjs.send_ctl, packet_out);
 
     lsquic_stream_window_update(stream, 20);
@@ -2212,12 +2212,12 @@ test_bad_packbits_guess_2 (void)
     assert(0 == memcmp(buf + 1337, buf_out, 1));
 
     /* Verify packets */
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl, 0);
     assert(lsquic_packet_out_packno_bits(packet_out) == GQUIC_PACKNO_LEN_6);
     assert(1 == packet_out->po_packno);
     assert(packet_out->po_frame_types & (1 << QUIC_FRAME_STREAM));
     lsquic_send_ctl_sent_packet(&tobjs.send_ctl, packet_out);
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl, 0);
     assert(lsquic_packet_out_packno_bits(packet_out) == GQUIC_PACKNO_LEN_6);
     assert(2 == packet_out->po_packno);
     assert(packet_out->po_frame_types & (1 << QUIC_FRAME_STREAM));
@@ -2294,12 +2294,12 @@ test_bad_packbits_guess_3 (void)
     assert(0 == memcmp(buf, buf_out, 1343));
 
     /* Verify packets */
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl, 0);
     assert(lsquic_packet_out_packno_bits(packet_out) == GQUIC_PACKNO_LEN_4);
     assert(1 == packet_out->po_packno);
     assert(packet_out->po_frame_types & (1 << QUIC_FRAME_STREAM));
     lsquic_send_ctl_sent_packet(&tobjs.send_ctl, packet_out);
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl, 0);
     assert(lsquic_packet_out_packno_bits(packet_out) == GQUIC_PACKNO_LEN_4);
     assert(2 == packet_out->po_packno);
     assert(packet_out->po_frame_types & (1 << QUIC_FRAME_STREAM));
@@ -2615,7 +2615,7 @@ test_window_update2 (void)
     assert(0 == memcmp(buf, "123", 3));
 
     /* Pretend we sent out a packet: */
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl, 0);
     lsquic_send_ctl_sent_packet(&tobjs.send_ctl, packet_out);
 
     lsquic_stream_window_update(stream, 20);
@@ -2815,12 +2815,12 @@ test_bad_packbits_guess_1 (void)
     assert(0 == memcmp(buf + 1337, buf_out, 1));
 
     /* Verify packets */
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl, 0);
     assert(lsquic_packet_out_packno_bits(packet_out) == GQUIC_PACKNO_LEN_6);
     assert(1 == packet_out->po_packno);
     assert(packet_out->po_frame_types & (1 << QUIC_FRAME_STREAM));
     lsquic_send_ctl_sent_packet(&tobjs.send_ctl, packet_out);
-    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl);
+    packet_out = lsquic_send_ctl_next_packet_to_send(&tobjs.send_ctl, 0);
     assert(lsquic_packet_out_packno_bits(packet_out) == GQUIC_PACKNO_LEN_6);
     assert(2 == packet_out->po_packno);
     assert(packet_out->po_frame_types & (1 << QUIC_FRAME_STREAM));

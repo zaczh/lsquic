@@ -1029,7 +1029,9 @@ new_stream_ext (struct full_conn *conn, lsquic_stream_id_t stream_id, int if_idx
     stream = lsquic_stream_new(stream_id, &conn->fc_pub,
         conn->fc_stream_ifs[if_idx].stream_if,
         conn->fc_stream_ifs[if_idx].stream_if_ctx, conn->fc_settings->es_sfcw,
-        conn->fc_cfg.max_stream_send, stream_ctor_flags);
+        stream_id == LSQUIC_GQUIC_STREAM_HANDSHAKE
+                                ? 16 * 1024 : conn->fc_cfg.max_stream_send,
+        stream_ctor_flags);
     if (stream)
         lsquic_hash_insert(conn->fc_pub.all_streams, &stream->id,
                             sizeof(stream->id), stream, &stream->sm_hash_el);

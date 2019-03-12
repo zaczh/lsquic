@@ -1435,8 +1435,9 @@ send_packets_out (struct lsquic_engine *engine,
         *packet = packet_out;
         ++packet;
         ++iov;
-        if (((1 << packet_out->po_header_type)
-            & ((1 << HETY_INITIAL)|(1 << HETY_HANDSHAKE)|(1 << HETY_0RTT)))
+        if ((conn->cn_flags & LSCONN_IETF)
+            && ((1 << packet_out->po_header_type)
+              & ((1 << HETY_INITIAL)|(1 << HETY_HANDSHAKE)|(1 << HETY_0RTT)))
 #ifndef NDEBUG
             && (engine->flags & ENG_COALESCE)
 #endif
