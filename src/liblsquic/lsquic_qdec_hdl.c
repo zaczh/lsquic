@@ -14,19 +14,19 @@
 #include "lsquic_types.h"
 #include "lsquic_int_types.h"
 #include "lsquic_sfcw.h"
-#include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hq.h"
 #include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_frab_list.h"
 #include "lsqpack.h"
-#include "lsquic_hq.h"
 #include "lsquic_http1x_if.h"
 #include "lsquic_qdec_hdl.h"
 #include "lsquic_mm.h"
 #include "lsquic_engine_public.h"
 #include "lsquic_headers.h"
 #include "lsquic_http1x_if.h"
+#include "lsquic_conn.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_QDEC_HDL
 #define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(qdh->qdh_conn)
@@ -89,7 +89,7 @@ qdh_begin_out (struct qpack_dec_hdl *qdh)
 
 
 int
-lsquic_qdh_init (struct qpack_dec_hdl *qdh, const struct lsquic_conn *conn,
+lsquic_qdh_init (struct qpack_dec_hdl *qdh, struct lsquic_conn *conn,
                     int is_server, const struct lsquic_engine_public *enpub,
                     unsigned dyn_table_size, unsigned max_risked_streams)
 {
@@ -277,11 +277,21 @@ qdh_in_on_read (struct lsquic_stream *stream, lsquic_stream_ctx_t *ctx)
     ssize_t nread;
 
     nread = lsquic_stream_readf(stream, qdh_read_decoder_stream, qdh);
-    if (nread < 0)
+    if (nread <= 0)
     {
-        LSQ_WARN("cannot read from decoder stream");
+        if (nread < 0)
+        {
+            LSQ_WARN("cannot read from decoder stream: %s", strerror(errno));
+            qdh->qdh_conn->cn_if->ci_internal_error(qdh->qdh_conn,
+                                        "cannot read from decoder stream");
+        }
+        else
+        {
+            LSQ_INFO("decoder stream closed by peer: abort connection");
+            qdh->qdh_conn->cn_if->ci_abort_error(qdh->qdh_conn, 1,
+                HEC_CLOSED_CRITICAL_STREAM, "decoder stream closed");
+        }
         lsquic_stream_wantread(stream, 0);
-        /* TODO: abort connection */
     }
 }
 

@@ -67,6 +67,7 @@
 #define TIME_BETWEEN_PINGS              15000000
 #define IDLE_TIMEOUT                    30000000
 
+
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 
@@ -101,15 +102,39 @@ enum ifull_conn_flags
     IFC_SWITCH_DCID   = 1 << 22, /* Perform DCID switch when a new CID becomes available */
 };
 
+enum send
+{
+    SEND_MAX_DATA,
+    SEND_PING,
+    SEND_PATH_RESP,
+    SEND_NEW_CID,
+    SEND_RETIRE_CID,
+    SEND_CONN_CLOSE,
+    SEND_STREAMS_BLOCKED,
+    SEND_STREAMS_BLOCKED_BIDI = SEND_STREAMS_BLOCKED + SD_BIDI,
+    SEND_STREAMS_BLOCKED_UNI = SEND_STREAMS_BLOCKED + SD_UNI,
+    SEND_MAX_STREAMS,
+    SEND_MAX_STREAMS_BIDI = SEND_MAX_STREAMS + SD_BIDI,
+    SEND_MAX_STREAMS_UNI = SEND_MAX_STREAMS + SD_UNI,
+    N_SEND
+};
+
 enum send_flags
 {
-    SF_SEND_MAX_DATA    =  1 << 0,
-    SF_SEND_PING        =  1 << 1,
-    SF_SEND_PATH_RESP   =  1 << 2,
-    SF_SEND_NEW_CID     =  1 << 3,
-    SF_SEND_RETIRE_CID  =  1 << 4,
-    SF_SEND_CONN_CLOSE  =  1 << 5,
+    SF_SEND_MAX_DATA                = 1 << SEND_MAX_DATA,
+    SF_SEND_PING                    = 1 << SEND_PING,
+    SF_SEND_PATH_RESP               = 1 << SEND_PATH_RESP,
+    SF_SEND_NEW_CID                 = 1 << SEND_NEW_CID,
+    SF_SEND_RETIRE_CID              = 1 << SEND_RETIRE_CID,
+    SF_SEND_CONN_CLOSE              = 1 << SEND_CONN_CLOSE,
+    SF_SEND_STREAMS_BLOCKED         = 1 << SEND_STREAMS_BLOCKED,
+    SF_SEND_STREAMS_BLOCKED_BIDI    = 1 << SEND_STREAMS_BLOCKED_BIDI,
+    SF_SEND_STREAMS_BLOCKED_UNI     = 1 << SEND_STREAMS_BLOCKED_UNI,
+    SF_SEND_MAX_STREAMS             = 1 << SEND_MAX_STREAMS,
+    SF_SEND_MAX_STREAMS_BIDI        = 1 << SEND_MAX_STREAMS_BIDI,
+    SF_SEND_MAX_STREAMS_UNI         = 1 << SEND_MAX_STREAMS_UNI,
 };
+
 
 #define IFC_IMMEDIATE_CLOSE_FLAGS \
             (IFC_TIMED_OUT|IFC_ERROR|IFC_ABORTED|IFC_HSK_FAILED|IFC_GOT_PRST)
@@ -191,10 +216,17 @@ struct ietf_full_conn
     lsquic_alarmset_t           ifc_alset;
     struct lsquic_set64         ifc_closed_stream_ids[N_SITS];
     lsquic_stream_id_t          ifc_n_created_streams[N_SDS];
+    /* Not including the value stored in ifc_max_allowed_stream_id: */
     lsquic_stream_id_t          ifc_max_allowed_stream_id[N_SITS];
+    uint64_t                    ifc_closed_peer_streams[N_SDS];
+    /* Maximum number of open stream initiated by peer: */
+    unsigned                    ifc_max_streams_in[N_SDS];
     uint64_t                    ifc_max_stream_data_uni;
     enum ifull_conn_flags       ifc_flags;
     enum send_flags             ifc_send_flags;
+    struct {
+        uint64_t    streams_blocked[N_SDS];
+    }                           ifc_send;
     struct conn_err             ifc_error;
     unsigned                    ifc_n_delayed_streams;
     unsigned                    ifc_n_cons_unretx;
@@ -215,7 +247,6 @@ struct ietf_full_conn
     lsquic_time_t               ifc_saved_ack_received;
     lsquic_packno_t             ifc_max_ack_packno[N_PNS];
     uint64_t                    ifc_path_chal;
-    lsquic_stream_id_t          ifc_max_peer_stream_id;
     struct {
         uint64_t    max_stream_send;
         uint8_t     ack_exp;
@@ -423,6 +454,8 @@ avail_streams_count (const struct ietf_full_conn *conn, int server,
 
     sit = gen_sit(server, sd);
     max_count = conn->ifc_max_allowed_stream_id[sit] >> SIT_SHIFT;
+    LSQ_DEBUG("sit-%u streams: max count: %"PRIu64"; created streams: %"PRIu64,
+        sit, max_count, conn->ifc_n_created_streams[sd]);
     if (max_count >= conn->ifc_n_created_streams[sd])
         return max_count - conn->ifc_n_created_streams[sd];
     else
@@ -441,7 +474,6 @@ create_uni_stream_out (struct ietf_full_conn *conn, int priority,
     struct lsquic_stream *stream;
     lsquic_stream_id_t stream_id;
 
-    /* TODO: check that we don't go over peer-advertized limit */
     stream_id = generate_stream_id(conn, SD_UNI);
     stream = lsquic_stream_new(stream_id, &conn->ifc_pub, stream_if,
                 stream_if_ctx, 0, conn->ifc_max_stream_data_uni,
@@ -610,7 +642,7 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *enpub,
         return NULL;
     }
     cce->cce_seqno = conn->ifc_scid_seqno++;
-    cce->cce_flags = CCE_USED;
+    cce->cce_flags = CCE_USED | CCE_SEQNO;
 
     if (!max_packet_size)
     {
@@ -639,11 +671,12 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *enpub,
     /* Do not infer anything about server limits before processing its
      * transport parameters.
      */
+    conn->ifc_max_streams_in[SD_BIDI] = enpub->enp_settings.es_max_streams_in;
     conn->ifc_max_allowed_stream_id[SIT_BIDI_SERVER] =
-        (enpub->enp_settings.es_max_streams_in << SIT_SHIFT) | SIT_BIDI_SERVER;
+        enpub->enp_settings.es_max_streams_in << SIT_SHIFT;
+    conn->ifc_max_streams_in[SD_UNI] = enpub->enp_settings.es_max_streams_in;
     conn->ifc_max_allowed_stream_id[SIT_UNI_SERVER] =
-        (1 + (flags & IFC_HTTP ? 2 /* TODO push streams? */ : 0)) << SIT_SHIFT
-                                                             | SIT_UNI_SERVER;
+        (1 + (flags & IFC_HTTP ? 2 /* TODO push streams? */ : 0)) << SIT_SHIFT;
 
     init_ver_neg(conn, versions);
     assert(ver == conn->ifc_ver_neg.vn_ver);
@@ -878,6 +911,7 @@ generate_new_cid_frame (struct ietf_full_conn *conn)
         return -1;
     }
     cce->cce_seqno = conn->ifc_scid_seqno++;
+    cce->cce_flags |= CCE_SEQNO;
 
         memset(token_buf, 0, sizeof(token_buf));
 
@@ -975,6 +1009,104 @@ generate_retire_cid_frames (struct ietf_full_conn *conn)
     do
         s = generate_retire_cid_frame(conn);
     while (0 == s && (conn->ifc_send_flags & SF_SEND_RETIRE_CID));
+}
+
+
+static void
+generate_streams_blocked_frame (struct ietf_full_conn *conn, enum stream_dir sd)
+{
+    struct lsquic_packet_out *packet_out;
+    uint64_t limit;
+    size_t need;
+    int w;
+
+    limit = conn->ifc_send.streams_blocked[sd];
+    need = conn->ifc_conn.cn_pf->pf_streams_blocked_frame_size(limit);
+    packet_out = get_writeable_packet(conn, need);
+    if (!packet_out)
+        return;
+
+    w = conn->ifc_conn.cn_pf->pf_gen_streams_blocked_frame(
+        packet_out->po_data + packet_out->po_data_sz,
+        lsquic_packet_out_avail(packet_out), sd == SD_UNI, limit);
+    if (w < 0)
+    {
+        ABORT_ERROR("generating STREAMS_BLOCKED frame failed: %d", errno);
+        return;
+    }
+    LSQ_DEBUG("generated %d-byte STREAMS_BLOCKED frame (uni: %d, "
+                                "limit: %"PRIu64")", w, sd == SD_UNI, limit);
+    EV_LOG_CONN_EVENT(LSQUIC_LOG_CONN_ID, "generated %d-byte STREAMS_BLOCKED "
+                "frame (uni: %d, limit: %"PRIu64")", w, sd == SD_UNI, limit);
+    packet_out->po_frame_types |= QUIC_FTBIT_STREAM_BLOCKED;
+    lsquic_send_ctl_incr_pack_sz(&conn->ifc_send_ctl, packet_out, w);
+    conn->ifc_send_flags &= ~(SF_SEND_STREAMS_BLOCKED << sd);
+}
+
+
+static void
+generate_streams_blocked_uni_frame (struct ietf_full_conn *conn)
+{
+    generate_streams_blocked_frame(conn, SD_UNI);
+}
+
+
+static void
+generate_streams_blocked_bidi_frame (struct ietf_full_conn *conn)
+{
+    generate_streams_blocked_frame(conn, SD_BIDI);
+}
+
+
+static void
+generate_max_streams_frame (struct ietf_full_conn *conn, enum stream_dir sd)
+{
+    struct lsquic_packet_out *packet_out;
+    enum stream_id_type sit;
+    uint64_t limit;
+    size_t need;
+    int w;
+
+    limit = conn->ifc_closed_peer_streams[sd] + conn->ifc_max_streams_in[sd];
+    need = conn->ifc_conn.cn_pf->pf_max_streams_frame_size(limit);
+    packet_out = get_writeable_packet(conn, need);
+    if (!packet_out)
+        return;
+
+    w = conn->ifc_conn.cn_pf->pf_gen_max_streams_frame(
+        packet_out->po_data + packet_out->po_data_sz,
+        lsquic_packet_out_avail(packet_out), sd, limit);
+    if (w < 0)
+    {
+        ABORT_ERROR("generating MAX_STREAMS frame failed: %d", errno);
+        return;
+    }
+    LSQ_DEBUG("generated %d-byte MAX_STREAMS frame (uni: %d, "
+                                "limit: %"PRIu64")", w, sd == SD_UNI, limit);
+    EV_LOG_CONN_EVENT(LSQUIC_LOG_CONN_ID, "generated %d-byte MAX_STREAMS "
+                "frame (uni: %d, limit: %"PRIu64")", w, sd == SD_UNI, limit);
+    packet_out->po_frame_types |= QUIC_FTBIT_MAX_STREAMS;
+    lsquic_send_ctl_incr_pack_sz(&conn->ifc_send_ctl, packet_out, w);
+    conn->ifc_send_flags &= ~(SF_SEND_MAX_STREAMS << sd);
+
+    sit = gen_sit(!(conn->ifc_flags & IFC_SERVER), sd);
+    LSQ_DEBUG("max_allowed_stream_id[ %u ] goes from %"PRIu64" to %"PRIu64,
+        sit, conn->ifc_max_allowed_stream_id[ sit ], limit << SIT_SHIFT);
+    conn->ifc_max_allowed_stream_id[ sit ] = limit << SIT_SHIFT;
+}
+
+
+static void
+generate_max_streams_uni_frame (struct ietf_full_conn *conn)
+{
+    generate_max_streams_frame(conn, SD_UNI);
+}
+
+
+static void
+generate_max_streams_bidi_frame (struct ietf_full_conn *conn)
+{
+    generate_max_streams_frame(conn, SD_BIDI);
 }
 
 
@@ -1126,15 +1258,43 @@ count_streams (const struct ietf_full_conn *conn, enum stream_id_type sit)
 #endif
 
 
+/* Because stream IDs are distributed unevenly, it is more efficient to
+ * maintain four sets of closed stream IDs.
+ */
 static void
 conn_mark_stream_closed (struct ietf_full_conn *conn,
                                                 lsquic_stream_id_t stream_id)
-{   /* Because stream IDs are distributed unevenly, it is more efficient to
-     * maintain four sets of closed stream IDs.
-     */
-    const enum stream_id_type idx = stream_id & SIT_MASK;
-    stream_id >>= SIT_SHIFT;
-    if (0 == lsquic_set64_add(&conn->ifc_closed_stream_ids[idx], stream_id))
+{
+    lsquic_stream_id_t shifted_id;
+    uint64_t max_allowed, thresh;
+    enum stream_id_type idx;
+    enum stream_dir sd;
+
+    idx = stream_id & SIT_MASK;
+    shifted_id = stream_id >> SIT_SHIFT;
+
+    if (is_peer_initiated(conn, stream_id)
+            && !lsquic_set64_has(&conn->ifc_closed_stream_ids[idx], shifted_id))
+    {
+        sd = (stream_id >> SD_SHIFT) & 1;
+        ++conn->ifc_closed_peer_streams[sd];
+        if (0 == (conn->ifc_send_flags & (SF_SEND_MAX_STREAMS << sd)))
+        {
+            max_allowed = conn->ifc_max_allowed_stream_id[idx] >> SIT_SHIFT;
+            thresh = conn->ifc_closed_peer_streams[sd]
+                                            + conn->ifc_max_streams_in[sd] / 2;
+            if (thresh >= max_allowed)
+            {
+                LSQ_DEBUG("closed incoming %sdirectional streams reached "
+                    "%"PRIu64", scheduled MAX_STREAMS frame",
+                    sd == SD_UNI ? "uni" : "bi",
+                    conn->ifc_closed_peer_streams[sd]);
+                conn->ifc_send_flags |= SF_SEND_MAX_STREAMS << sd;
+            }
+        }
+    }
+
+    if (0 == lsquic_set64_add(&conn->ifc_closed_stream_ids[idx], shifted_id))
         LSQ_DEBUG("marked stream %"PRIu64" as closed", stream_id);
     else
         ABORT_ERROR("could not add element to set: %s", strerror(errno));
@@ -1400,6 +1560,27 @@ get_new_dce (struct ietf_full_conn *conn)
 }
 
 
+static void
+queue_streams_blocked_frame (struct ietf_full_conn *conn, enum stream_dir sd)
+{
+    enum stream_id_type sit;
+    uint64_t limit;
+
+    if (0 == (conn->ifc_send_flags & (SF_SEND_STREAMS_BLOCKED << sd)))
+    {
+        conn->ifc_send_flags |= SF_SEND_STREAMS_BLOCKED << sd;
+        sit = gen_sit(conn->ifc_flags & IFC_SERVER, sd);
+        limit = conn->ifc_max_allowed_stream_id[sit] >> SIT_SHIFT;
+        conn->ifc_send.streams_blocked[sd] = limit;
+        LSQ_DEBUG("scheduled %sdirectional STREAMS_BLOCKED (limit=%"PRIu64
+            ") frame", sd == SD_BIDI ? "bi" : "uni", limit);
+    }
+    else
+        LSQ_DEBUG("%sdirectional STREAMS_BLOCKED frame already queued",
+            sd == SD_BIDI ? "bi" : "uni");
+}
+
+
 static int
 handshake_ok (struct lsquic_conn *lconn)
 {
@@ -1429,10 +1610,10 @@ handshake_ok (struct lsquic_conn *lconn)
 
     sit = gen_sit(conn->ifc_flags & IFC_SERVER, SD_BIDI);
     conn->ifc_max_allowed_stream_id[sit] =
-                        (params.tp_init_max_streams_bidi << SIT_SHIFT) | sit;
+                        params.tp_init_max_streams_bidi << SIT_SHIFT;
     sit = gen_sit(conn->ifc_flags & IFC_SERVER, SD_UNI);
     conn->ifc_max_allowed_stream_id[sit] =
-                        (params.tp_init_max_streams_uni << SIT_SHIFT) | sit;
+                        params.tp_init_max_streams_uni << SIT_SHIFT;
 
     conn->ifc_max_stream_data_uni      = params.tp_init_max_stream_data_uni;
 
@@ -1463,7 +1644,7 @@ handshake_ok (struct lsquic_conn *lconn)
         }
     }
 
-    conn->ifc_cfg.max_stream_send = params.tp_init_max_stream_data_bidi_local;
+    conn->ifc_cfg.max_stream_send = params.tp_init_max_stream_data_bidi_remote;
     conn->ifc_cfg.ack_exp = params.tp_ack_delay_exponent;
 
     /* TODO: idle timeout, packet size */
@@ -1538,8 +1719,11 @@ handshake_ok (struct lsquic_conn *lconn)
             }
         }
         else
+        {
+            queue_streams_blocked_frame(conn, SD_UNI);
             LSQ_DEBUG("cannot create outgoing QPACK decoder stream due to "
                 "unidir limits");
+        }
     }
 
     if ((1 << conn->ifc_conn.cn_n_cces) - 1 != conn->ifc_conn.cn_cces_mask
@@ -1928,10 +2112,10 @@ generate_ping_frame (struct ietf_full_conn *conn)
 
 
 static struct lsquic_packet_out *
-ietf_full_conn_ci_next_packet_to_send (struct lsquic_conn *lconn)
+ietf_full_conn_ci_next_packet_to_send (struct lsquic_conn *lconn, size_t size)
 {
     struct ietf_full_conn *conn = (struct ietf_full_conn *) lconn;
-    return lsquic_send_ctl_next_packet_to_send(&conn->ifc_send_ctl);
+    return lsquic_send_ctl_next_packet_to_send(&conn->ifc_send_ctl, size);
 }
 
 
@@ -2305,8 +2489,6 @@ process_rst_stream_frame (struct ietf_full_conn *conn,
             return 0;
         }
         ++call_on_new;
-        if (stream_id > conn->ifc_max_peer_stream_id)
-            conn->ifc_max_peer_stream_id = stream_id;
     }
 
     if (0 != lsquic_stream_rst_in(stream, offset, error_code))
@@ -2372,7 +2554,7 @@ process_stop_sending_frame (struct ietf_full_conn *conn,
     else
     {
         max_allowed = conn->ifc_max_allowed_stream_id[stream_id & SIT_MASK];
-        if (stream_id > max_allowed)
+        if (stream_id >= max_allowed)
         {
             ABORT_QUIETLY(0, TEC_STREAM_LIMIT_ERROR, "incoming STOP_SENDING "
                 "for stream %"PRIu64" would exceed allowed max of %"PRIu64,
@@ -2392,8 +2574,6 @@ process_stop_sending_frame (struct ietf_full_conn *conn,
             ABORT_ERROR("cannot create new stream: %s", strerror(errno));
             return 0;
         }
-        if (stream_id > conn->ifc_max_peer_stream_id)
-            conn->ifc_max_peer_stream_id = stream_id;
         lsquic_stream_stop_sending_in(stream, error_code);
         lsquic_stream_call_on_new(stream);
     }
@@ -2534,7 +2714,7 @@ process_stream_frame (struct ietf_full_conn *conn,
         {
             const lsquic_stream_id_t max_allowed =
                 conn->ifc_max_allowed_stream_id[stream_frame->stream_id & SIT_MASK];
-            if (stream_frame->stream_id > max_allowed)
+            if (stream_frame->stream_id >= max_allowed)
             {
                 ABORT_WARN("incoming stream %"PRIu64" exceeds allowed max of "
                     "%"PRIu64, stream_frame->stream_id, max_allowed);
@@ -2564,8 +2744,6 @@ process_stream_frame (struct ietf_full_conn *conn,
             lsquic_malo_put(stream_frame);
             return 0;
         }
-        if (stream_frame->stream_id > conn->ifc_max_peer_stream_id)
-            conn->ifc_max_peer_stream_id = stream_frame->stream_id;
     }
 
     stream_frame->packet_in = lsquic_packet_in_get(packet_in);
@@ -2772,10 +2950,10 @@ process_max_stream_data_frame (struct ietf_full_conn *conn,
     if (parsed_len < 0)
         return 0;
 
-    if (conn_is_send_only_stream(conn, stream_id))
+    if (conn_is_receive_only_stream(conn, stream_id))
     {
         ABORT_QUIETLY(0, TEC_STREAM_STATE_ERROR,
-            "received MAX_STREAM_DATA on send-only stream %"PRIu64, stream_id);
+            "received MAX_STREAM_DATA on receive-only stream %"PRIu64, stream_id);
         return 0;
     }
 
@@ -2812,7 +2990,7 @@ process_max_streams_frame (struct ietf_full_conn *conn,
         return 0;
 
     sit = gen_sit(conn->ifc_flags & IFC_SERVER, sd);
-    max_stream_id = (max_streams << SIT_SHIFT) | sit;
+    max_stream_id = max_streams << SIT_SHIFT;
     if (max_stream_id > conn->ifc_max_allowed_stream_id[sit])
     {
         LSQ_DEBUG("max %s stream ID updated from %"PRIu64" to %"PRIu64,
@@ -2894,59 +3072,27 @@ process_new_connection_id_frame (struct ietf_full_conn *conn,
 }
 
 
-static unsigned
-process_retire_connection_id_frame (struct ietf_full_conn *conn,
-        struct lsquic_packet_in *packet_in, const unsigned char *p, size_t len)
+static void
+retire_cid (struct ietf_full_conn *conn, struct conn_cid_elem *cce,
+                                                        lsquic_time_t now)
 {
     struct lsquic_conn *const lconn = &conn->ifc_conn;
-    struct conn_cid_elem *cce;
-    uint64_t seqno;
-    int parsed_len;
+    const int have_seqno = !!(cce->cce_flags & CCE_SEQNO);
 
-    /* [draft-ietf-quic-transport-16] Section 19.13 */
-    if (conn->ifc_settings->es_scid_len == 0)
-    {
-        ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION, "cannot retire zero-length CID");
-        return 0;
-    }
+    if (have_seqno)
+        LSQ_DEBUGC("retiring CID %"CID_FMT"; seqno: %u; is current: %d",
+            CID_BITS(&cce->cce_cid), cce->cce_seqno,
+            cce->cce_seqno == lconn->cn_cur_cce_idx);
+    else
+        LSQ_DEBUGC("retiring original CID %"CID_FMT, CID_BITS(&cce->cce_cid));
 
-    parsed_len = conn->ifc_conn.cn_pf->pf_parse_retire_cid_frame(p, len,
-                                                                    &seqno);
-    if (parsed_len < 0)
-        return 0;
-
-    EV_LOG_CONN_EVENT(LSQUIC_LOG_CONN_ID, "got RETIRE_CONNECTION_ID frame: "
-                                                        "seqno=%"PRIu64, seqno);
-    /* [draft-ietf-quic-transport-16] Section 19.13 */
-    if (seqno >= conn->ifc_scid_seqno)
-    {
-        ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION, "cannot retire CID seqno="
-                        "%"PRIu64" as it has not been allocated yet", seqno);
-        return 0;
-    }
-
-    for (cce = lconn->cn_cces; cce < END_OF_CCES(lconn); ++cce)
-        if ((lconn->cn_cces_mask & (1 << (cce - lconn->cn_cces))
-                && cce->cce_seqno == seqno))
-            break;
-
-    if (cce >= END_OF_CCES(lconn))
-    {
-        LSQ_DEBUG("cannot retire CID seqno=%"PRIu64": not found", seqno);
-        return parsed_len;
-    }
-
-    LSQ_DEBUGC("retiring CID %"CID_FMT"; seqno: %u; is current: %d",
-        CID_BITS(&cce->cce_cid), cce->cce_seqno,
-        seqno == lconn->cn_cur_cce_idx);
-    lsquic_engine_retire_cid(conn->ifc_enpub, lconn, cce - lconn->cn_cces,
-                                                        packet_in->pi_received);
+    lsquic_engine_retire_cid(conn->ifc_enpub, lconn, cce - lconn->cn_cces, now);
     memset(cce, 0, sizeof(*cce));
 
     if ((1 << conn->ifc_conn.cn_n_cces) - 1 != conn->ifc_conn.cn_cces_mask)
         conn->ifc_send_flags |= SF_SEND_NEW_CID;
 
-    if (seqno == lconn->cn_cur_cce_idx)
+    if (have_seqno && cce->cce_seqno == lconn->cn_cur_cce_idx)
     {
         /* When current connection ID is retired, we need to pick the new
          * current CCE index.  We prefer a CCE that's already been used
@@ -2998,6 +3144,50 @@ process_retire_connection_id_frame (struct ietf_full_conn *conn,
             LSQ_INFO("last SCID retired; set current CCE index to 0");
         }
     }
+}
+
+
+static unsigned
+process_retire_connection_id_frame (struct ietf_full_conn *conn,
+        struct lsquic_packet_in *packet_in, const unsigned char *p, size_t len)
+{
+    struct lsquic_conn *const lconn = &conn->ifc_conn;
+    struct conn_cid_elem *cce;
+    uint64_t seqno;
+    int parsed_len;
+
+    /* [draft-ietf-quic-transport-16] Section 19.13 */
+    if (conn->ifc_settings->es_scid_len == 0)
+    {
+        ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION, "cannot retire zero-length CID");
+        return 0;
+    }
+
+    parsed_len = conn->ifc_conn.cn_pf->pf_parse_retire_cid_frame(p, len,
+                                                                    &seqno);
+    if (parsed_len < 0)
+        return 0;
+
+    EV_LOG_CONN_EVENT(LSQUIC_LOG_CONN_ID, "got RETIRE_CONNECTION_ID frame: "
+                                                        "seqno=%"PRIu64, seqno);
+    /* [draft-ietf-quic-transport-16] Section 19.13 */
+    if (seqno >= conn->ifc_scid_seqno)
+    {
+        ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION, "cannot retire CID seqno="
+                        "%"PRIu64" as it has not been allocated yet", seqno);
+        return 0;
+    }
+
+    for (cce = lconn->cn_cces; cce < END_OF_CCES(lconn); ++cce)
+        if ((lconn->cn_cces_mask & (1 << (cce - lconn->cn_cces))
+                && (cce->cce_flags & CCE_SEQNO)
+                && cce->cce_seqno == seqno))
+            break;
+
+    if (cce < END_OF_CCES(lconn))
+        retire_cid(conn, cce, packet_in->pi_received);
+    else
+        LSQ_DEBUG("cannot retire CID seqno=%"PRIu64": not found", seqno);
 
     return parsed_len;
 }
@@ -3072,6 +3262,27 @@ process_stream_blocked_frame (struct ietf_full_conn *conn,
 
 
 static unsigned
+process_streams_blocked_frame (struct ietf_full_conn *conn,
+        struct lsquic_packet_in *packet_in, const unsigned char *p, size_t len)
+{
+    uint64_t stream_limit;
+    enum stream_dir sd;
+    int parsed_len;
+
+    parsed_len = conn->ifc_conn.cn_pf->pf_parse_streams_blocked_frame(p,
+                                                len, &sd, &stream_limit);
+    if (parsed_len < 0)
+        return 0;
+
+    LSQ_DEBUG("received STREAMS_BLOCKED frame: limited to %"PRIu64
+        " %sdirectional stream%.*s", stream_limit, sd == SD_UNI ? "uni" : "bi",
+        stream_limit != 1, "s");
+    /* We don't do anything with this information -- at least for now */
+    return parsed_len;
+}
+
+
+static unsigned
 process_blocked_frame (struct ietf_full_conn *conn,
         struct lsquic_packet_in *packet_in, const unsigned char *p, size_t len)
 {
@@ -3085,23 +3296,6 @@ process_blocked_frame (struct ietf_full_conn *conn,
     LSQ_DEBUG("received BLOCKED frame: offset %"PRIu64, off);
     /* XXX Try to do something? */
     return parsed_len;
-}
-
-
-/* XXX This frame will be gone in ID-17, don't implement it just yet. */
-static unsigned
-process_GONE_IN_ID_17 (struct ietf_full_conn *conn,
-        struct lsquic_packet_in *packet_in, const unsigned char *p, size_t len)
-{
-    uint64_t val;
-    int parsed_len;
-
-    LSQ_DEBUG("Ignore frame value");
-    parsed_len = conn->ifc_conn.cn_pf->pf_parse_blocked_frame(p, len, &val);
-    if (parsed_len < 0)
-        return 0;
-    else
-        return parsed_len;
 }
 
 
@@ -3121,7 +3315,7 @@ static process_frame_f const process_frames[N_QUIC_FRAMES] =
     [QUIC_FRAME_PING]               =  process_ping_frame,
     [QUIC_FRAME_BLOCKED]            =  process_blocked_frame,
     [QUIC_FRAME_STREAM_BLOCKED]     =  process_stream_blocked_frame,
-    [QUIC_FRAME_STREAM_ID_BLOCKED]  =  process_GONE_IN_ID_17,
+    [QUIC_FRAME_STREAMS_BLOCKED]    =  process_streams_blocked_frame,
     [QUIC_FRAME_NEW_CONNECTION_ID]  =  process_new_connection_id_frame,
     [QUIC_FRAME_NEW_TOKEN]          =  process_new_token_frame,
     [QUIC_FRAME_STOP_SENDING]       =  process_stop_sending_frame,
@@ -3628,6 +3822,23 @@ ietf_full_conn_ci_packet_sent (struct lsquic_conn *lconn,
 }
 
 
+static void (*const send_funcs[N_SEND])(struct ietf_full_conn *) =
+{
+    [SEND_NEW_CID]      = generate_new_cid_frames,
+    [SEND_RETIRE_CID]   = generate_retire_cid_frames,
+    [SEND_STREAMS_BLOCKED_UNI]  = generate_streams_blocked_uni_frame,
+    [SEND_STREAMS_BLOCKED_BIDI] = generate_streams_blocked_bidi_frame,
+    [SEND_MAX_STREAMS_UNI]  = generate_max_streams_uni_frame,
+    [SEND_MAX_STREAMS_BIDI] = generate_max_streams_bidi_frame,
+};
+
+
+/* List bits that have corresponding entries in send_funcs */
+#define SEND_WITH_FUNCS (SF_SEND_NEW_CID|SF_SEND_RETIRE_CID\
+    |SF_SEND_STREAMS_BLOCKED_UNI|SF_SEND_STREAMS_BLOCKED_BIDI\
+    |SF_SEND_MAX_STREAMS_UNI|SF_SEND_MAX_STREAMS_BIDI\
+    )
+
 static enum tick_st
 ietf_full_conn_ci_tick (struct lsquic_conn *lconn, lsquic_time_t now)
 {
@@ -3739,18 +3950,15 @@ ietf_full_conn_ci_tick (struct lsquic_conn *lconn, lsquic_time_t now)
         CLOSE_IF_NECESSARY();
     }
 
-    if (conn->ifc_send_flags)
+    if (conn->ifc_send_flags & SEND_WITH_FUNCS)
     {
-        if (conn->ifc_send_flags & SF_SEND_NEW_CID)
-        {
-            generate_new_cid_frames(conn);
-            CLOSE_IF_NECESSARY();
-        }
-        if (conn->ifc_send_flags & SF_SEND_RETIRE_CID)
-        {
-            generate_retire_cid_frames(conn);
-            CLOSE_IF_NECESSARY();
-        }
+        enum send send;
+        for (send = 0; send < N_SEND; ++send)
+            if (conn->ifc_send_flags & (1 << send) & SEND_WITH_FUNCS)
+            {
+                send_funcs[send](conn);
+                CLOSE_IF_NECESSARY();
+            }
     }
 
     n = lsquic_send_ctl_reschedule_packets(&conn->ifc_send_ctl);
@@ -3973,7 +4181,7 @@ static unsigned
 ietf_full_conn_ci_n_avail_streams (const struct lsquic_conn *lconn)
 {
     struct ietf_full_conn *const conn = (struct ietf_full_conn *) lconn;
-    return avail_streams_count(conn, !(conn->ifc_flags & IFC_SERVER), SD_BIDI);
+    return avail_streams_count(conn, conn->ifc_flags & IFC_SERVER, SD_BIDI);
 }
 
 
@@ -4014,7 +4222,33 @@ ietf_full_conn_ci_internal_error (struct lsquic_conn *lconn,
 }
 
 
+static void
+ietf_full_conn_ci_abort_error (struct lsquic_conn *lconn, int is_app,
+                                unsigned error_code, const char *fmt, ...)
+{
+    struct ietf_full_conn *const conn = (struct ietf_full_conn *) lconn;
+    va_list ap;
+    const char *err_str, *percent;
+    char err_buf[0x100];
+
+    percent = strchr(fmt, '%');
+    if (percent)
+    {
+        va_start(ap, fmt);
+        vsnprintf(err_buf, sizeof(err_buf), fmt, ap);
+        va_end(ap);
+        err_str = err_buf;
+    }
+    else
+        err_str = fmt;
+    LSQ_INFO("abort error: is_app: %d; error code: %u; error str: %s",
+        is_app, error_code, err_str);
+    ABORT_QUIETLY(is_app, error_code, "%s", err_str);
+}
+
+
 static const struct conn_iface ietf_full_conn_iface = {
+    .ci_abort_error          =  ietf_full_conn_ci_abort_error,
     .ci_can_write_ack        =  ietf_full_conn_ci_can_write_ack,
     .ci_cancel_pending_streams =  ietf_full_conn_ci_cancel_pending_streams,
     .ci_client_call_on_new   =  ietf_full_conn_ci_client_call_on_new,
@@ -4052,10 +4286,10 @@ on_priority (void *ctx, const struct hq_priority *priority)
 {
     struct ietf_full_conn *const conn = ctx;
     LSQ_DEBUG("%s: %s #%"PRIu64" depends on %s #%"PRIu64"; "
-        "exclusive: %d; weight: %u", __func__,
-        lsquic_hqelt2str[priority->hqp_prio_type], priority->hqp_prio_id,
-        lsquic_hqelt2str[priority->hqp_dep_type], priority->hqp_dep_id,
-        priority->hqp_exclusive, HQP_WEIGHT(priority));
+        "weight: %u", __func__,
+        lsquic_h3pet2str[priority->hqp_prio_type], priority->hqp_prio_id,
+        lsquic_h3det2str[priority->hqp_dep_type], priority->hqp_dep_id,
+        HQP_WEIGHT(priority));
     /* TODO */
 }
 
@@ -4106,7 +4340,10 @@ on_settings_frame (void *ctx)
             ABORT_WARN("cannot create outgoing QPACK encoder stream");
     }
     else
+    {
+        queue_streams_blocked_frame(conn, SD_UNI);
         LSQ_DEBUG("cannot create QPACK encoder stream due to unidir limit");
+    }
     maybe_create_delayed_streams(conn);
 }
 
@@ -4210,6 +4447,7 @@ static void
 hcsi_on_read (struct lsquic_stream *stream, lsquic_stream_ctx_t *ctx)
 {
     struct ietf_full_conn *const conn = (void *) ctx;
+    struct lsquic_conn *const lconn = &conn->ifc_conn;
     struct feed_hcsi_ctx feed_ctx = { conn, 0, };
     ssize_t nread;
 
@@ -4224,7 +4462,9 @@ hcsi_on_read (struct lsquic_stream *stream, lsquic_stream_ctx_t *ctx)
     else if (nread == 0)
     {
         lsquic_stream_wantread(stream, 0);
-        ABORT_WARN("FIN on HTTP control stream");
+        LSQ_INFO("control stream closed by peer: abort connection");
+        lconn->cn_if->ci_abort_error(lconn, 1,
+            HEC_CLOSED_CRITICAL_STREAM, "control stream closed");
     }
     else if (feed_ctx.s != 0)
     {

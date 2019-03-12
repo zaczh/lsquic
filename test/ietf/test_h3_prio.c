@@ -10,8 +10,8 @@
 #include "lsquic_conn.h"
 #include "lsquic_h3_prio.h"
 #include "lsquic_sfcw.h"
-#include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hq.h"
 #include "lsquic_hash.h"
 #include "lsquic_stream.h"
 

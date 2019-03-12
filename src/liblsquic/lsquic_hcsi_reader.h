@@ -34,22 +34,19 @@ struct hcsi_reader
         HR_READ_SETTING_VALUE,
         HR_READ_SETTING_VALUE_CONTINUE,
         HR_READ_PRIORITY_BEGIN,
-        HR_READ_PRIO_ID,
-        HR_READ_PRIO_ID_CONTINUE,
-        HR_READ_DEP_ID,
-        HR_READ_DEP_ID_CONTINUE,
-        HR_READ_WEIGHT,
+        HR_READ_PRIORITY_CONTINUE,
         HR_READ_VARINT,
         HR_READ_VARINT_CONTINUE,
         HR_ERROR,
     }                               hr_state;
     enum hq_frame_type              hr_frame_type:8;
-    const struct lsquic_conn       *hr_conn;
+    struct lsquic_conn             *hr_conn;
     uint64_t                        hr_frame_length;
     struct varint_read_state        hr_varint_state;
     union
     {
-        struct hq_priority      priority;
+        struct h3_prio_frame_read_state
+                                prio;
         struct {
             uint16_t            id;
         }                       settings;
@@ -61,7 +58,7 @@ struct hcsi_reader
 
 
 void
-lsquic_hcsi_reader_init (struct hcsi_reader *, const struct lsquic_conn *,
+lsquic_hcsi_reader_init (struct hcsi_reader *, struct lsquic_conn *,
                                 const struct hcsi_callbacks *, void *cb_ctx);
 
 int

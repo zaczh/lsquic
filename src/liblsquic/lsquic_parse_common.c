@@ -98,7 +98,7 @@ const enum quic_ft_bit lsquic_legal_frames_by_level[N_ENC_LEVS] =
                     | QUIC_FTBIT_BLOCKED
                     | QUIC_FTBIT_MAX_DATA | QUIC_FTBIT_MAX_STREAM_DATA
                     | QUIC_FTBIT_MAX_STREAMS | QUIC_FTBIT_STREAM_BLOCKED
-                    | QUIC_FTBIT_STREAM_ID_BLOCKED
+                    | QUIC_FTBIT_STREAMS_BLOCKED
                     | QUIC_FTBIT_NEW_CONNECTION_ID | QUIC_FTBIT_STOP_SENDING
                     | QUIC_FTBIT_PATH_CHALLENGE | QUIC_FTBIT_PATH_RESPONSE
                     | QUIC_FTBIT_RETIRE_CONNECTION_ID | QUIC_FTBIT_NEW_TOKEN,

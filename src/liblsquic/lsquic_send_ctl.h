@@ -142,7 +142,7 @@ void
 lsquic_send_ctl_delayed_one (lsquic_send_ctl_t *, struct lsquic_packet_out *);
 
 struct lsquic_packet_out *
-lsquic_send_ctl_next_packet_to_send (lsquic_send_ctl_t *);
+lsquic_send_ctl_next_packet_to_send (struct lsquic_send_ctl *, size_t);
 
 void
 lsquic_send_ctl_expire_all (lsquic_send_ctl_t *ctl);

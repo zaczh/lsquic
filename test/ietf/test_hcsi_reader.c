@@ -8,8 +8,8 @@
 
 #include "lsquic.h"
 #include "lsquic_int_types.h"
-#include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hq.h"
 #include "lsquic_hcsi_reader.h"
 #include "lsquic_hash.h"
 #include "lsquic_conn.h"
@@ -33,14 +33,64 @@ static const struct test tests[] =
         {
             0x05,
             0x02,
-            (HQET_REQ_STREAM << HQ_PT_SHIFT) | (HQET_PLACEHOLDER << HQ_DT_SHIFT) | 1,
+            /* The `1' used to be the `exclusive' flag.  It is left here to
+             * test that the frame reader ignores these Emtpy bits.
+             */
+            (H3PET_REQ_STREAM << HQ_PT_SHIFT) | (H3DET_PLACEHOLDER << HQ_DT_SHIFT) | 1,
             0x03,
             0x40, 0x33,
             0x77,
         },
         7,
         0,
-        "on_priority: request stream #3 depends on placeholder #51; exclusive: 1; weight: 120\n",
+        "on_priority: request stream #3 depends on placeholder #51; weight: 120\n",
+    },
+
+    {
+        __LINE__,
+        {
+            0x03,
+            0x02,
+            (H3PET_REQ_STREAM << HQ_PT_SHIFT) | (H3DET_ROOT << HQ_DT_SHIFT),
+            0x03,
+            0x77,
+        },
+        5,
+        0,
+        "on_priority: request stream #3 depends on root; weight: 120\n",
+    },
+
+    {
+        __LINE__,
+        {
+            0x04,
+            0x02,
+            /* The `1' used to be the `exclusive' flag.  It is left here to
+             * test that the frame reader ignores these Emtpy bits.
+             */
+            (H3PET_CUR_STREAM << HQ_PT_SHIFT) | (H3DET_PLACEHOLDER << HQ_DT_SHIFT),
+            0x40, 0x33,
+            0x77,
+        },
+        6,
+        0,
+        "on_priority: current stream depends on placeholder #51; weight: 120\n",
+    },
+
+    {
+        __LINE__,
+        {
+            0x02,
+            0x02,
+            /* The `1' used to be the `exclusive' flag.  It is left here to
+             * test that the frame reader ignores these Emtpy bits.
+             */
+            (H3PET_CUR_STREAM << HQ_PT_SHIFT) | (H3DET_ROOT << HQ_DT_SHIFT),
+            0x77,
+        },
+        4,
+        0,
+        "on_priority: current stream depends on root; weight: 120\n",
     },
 
     {
@@ -114,11 +164,36 @@ static const struct test tests[] =
 static void
 on_priority (void *ctx, const struct hq_priority *priority)
 {
-    fprintf(ctx, "%s: %s #%"PRIu64" depends on %s #%"PRIu64"; "
-        "exclusive: %d; weight: %u\n", __func__,
-        lsquic_hqelt2str[priority->hqp_prio_type], priority->hqp_prio_id,
-        lsquic_hqelt2str[priority->hqp_dep_type], priority->hqp_dep_id,
-        priority->hqp_exclusive, HQP_WEIGHT(priority));
+    switch (((priority->hqp_prio_type == H3PET_CUR_STREAM) << 1)
+           | (priority->hqp_dep_type  == H3DET_ROOT))
+    {
+    case 0:
+        fprintf(ctx, "%s: %s #%"PRIu64" depends on %s #%"PRIu64"; "
+            "weight: %u\n", __func__,
+            lsquic_h3pet2str[priority->hqp_prio_type], priority->hqp_prio_id,
+            lsquic_h3det2str[priority->hqp_dep_type], priority->hqp_dep_id,
+            HQP_WEIGHT(priority));
+        break;
+    case 1:
+        fprintf(ctx, "%s: %s #%"PRIu64" depends on root; "
+            "weight: %u\n", __func__,
+            lsquic_h3pet2str[priority->hqp_prio_type], priority->hqp_prio_id,
+            HQP_WEIGHT(priority));
+        break;
+    case 2:
+        fprintf(ctx, "%s: current stream depends on %s #%"PRIu64"; "
+            "weight: %u\n", __func__,
+            lsquic_h3det2str[priority->hqp_dep_type], priority->hqp_dep_id,
+            HQP_WEIGHT(priority));
+        break;
+    default:
+        assert(0);
+    case 3:
+        fprintf(ctx, "%s: current stream depends on root; "
+            "weight: %u\n", __func__,
+            HQP_WEIGHT(priority));
+        break;
+    }
 }
 
 static void
@@ -168,6 +243,19 @@ static const struct hcsi_callbacks callbacks =
     .on_unexpected_frame    = on_unexpected_frame,
 };
 
+
+static void
+abort_error (struct lsquic_conn *conn, int is_app, unsigned error_code,
+                                                    const char *format, ...)
+{
+}
+
+
+static const struct conn_iface conn_iface = {
+    .ci_abort_error     = abort_error,
+};
+
+
 static void
 run_test (const struct test *test)
 {
@@ -178,6 +266,7 @@ run_test (const struct test *test)
     const unsigned char *p;
     int s;
     struct lsquic_conn lconn = LSCONN_INITIALIZER_CIDLEN(lconn, 0);
+    lconn.cn_if = &conn_iface;
 
     for (read_sz = 1; read_sz < test->input_sz; ++read_sz)
     {

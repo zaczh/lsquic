@@ -18,7 +18,7 @@ struct lsquic_engine_public;
 
 struct qpack_dec_hdl
 {
-    const struct lsquic_conn *qdh_conn;
+    struct lsquic_conn      *qdh_conn;
     enum {
         QDH_INITIALIZED     = 1 << 0,
     }                        qdh_flags;
@@ -33,7 +33,7 @@ struct qpack_dec_hdl
 };
 
 int
-lsquic_qdh_init (struct qpack_dec_hdl *, const struct lsquic_conn *,
+lsquic_qdh_init (struct qpack_dec_hdl *, struct lsquic_conn *,
                     int is_server, const struct lsquic_engine_public *,
                     unsigned dyn_table_size, unsigned max_risked_streams);
 

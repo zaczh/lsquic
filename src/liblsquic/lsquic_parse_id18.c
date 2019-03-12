@@ -27,8 +27,8 @@
 #include "lsquic_parse.h"
 #include "lsquic_parse_common.h"
 #include "lsquic_sfcw.h"
-#include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hq.h"
 #include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_mm.h"
@@ -1308,6 +1308,39 @@ id18_stream_blocked_frame_size (lsquic_stream_id_t stream_id, uint64_t off)
 
 
 static int
+id18_gen_streams_blocked_frame (unsigned char *buf, size_t len,
+                                    enum stream_dir sd, uint64_t limit)
+{
+    return id18_gen_one_varint(buf, len, 0x16 + (sd == SD_UNI), limit);
+}
+
+
+static int
+id18_parse_streams_blocked_frame (const unsigned char *buf, size_t len,
+                                    enum stream_dir *sd, uint64_t *limit)
+{
+    int s;
+
+    s = id18_parse_one_varint(buf, len, limit);
+    if (s > 0)
+    {
+        if (buf[0] == 0x16)
+            *sd = SD_BIDI;
+        else
+            *sd = SD_UNI;
+    }
+    return s;
+}
+
+
+static unsigned
+id18_streams_blocked_frame_size (uint64_t limit)
+{
+    return id18_one_varint_size(limit);
+}
+
+
+static int
 id18_gen_stream_blocked_frame (unsigned char *buf, size_t len,
                                     lsquic_stream_id_t stream_id, uint64_t off)
 {
@@ -1348,6 +1381,21 @@ id18_parse_max_streams_frame (const unsigned char *buf, size_t len,
     if (s > 0)
         *sd = buf[0] == 0x12 ? SD_BIDI : SD_UNI;
     return s;
+}
+
+
+static int
+id18_gen_max_streams_frame (unsigned char *buf, size_t len,
+                                    enum stream_dir sd, uint64_t limit)
+{
+    return id18_gen_one_varint(buf, len, 0x12 + (sd == SD_UNI), limit);
+}
+
+
+static unsigned
+id18_max_streams_frame_size (uint64_t limit)
+{
+    return id18_one_varint_size(limit);
 }
 
 
@@ -1708,5 +1756,10 @@ const struct parse_funcs lsquic_parse_funcs_id18 =
     .pf_parse_retire_cid_frame        =  id18_parse_retire_cid_frame,
     .pf_gen_retire_cid_frame          =  id18_gen_retire_cid_frame,
     .pf_retire_cid_frame_size         =  id18_retire_cid_frame_size,
+    .pf_gen_streams_blocked_frame     =  id18_gen_streams_blocked_frame,
+    .pf_parse_streams_blocked_frame   =  id18_parse_streams_blocked_frame,
+    .pf_streams_blocked_frame_size    =  id18_streams_blocked_frame_size,
+    .pf_gen_max_streams_frame         =  id18_gen_max_streams_frame,
     .pf_parse_max_streams_frame       =  id18_parse_max_streams_frame,
+    .pf_max_streams_frame_size        =  id18_max_streams_frame_size,
 };

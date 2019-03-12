@@ -72,8 +72,10 @@
 struct out_batch
 {
     lsquic_conn_t           *conns  [MAX_OUT_BATCH_SIZE];
-    lsquic_packet_out_t     *packets[MAX_OUT_BATCH_SIZE];
     struct lsquic_out_spec   outs   [MAX_OUT_BATCH_SIZE];
+    unsigned                 pack_off[MAX_OUT_BATCH_SIZE];
+    lsquic_packet_out_t     *packets[MAX_OUT_BATCH_SIZE * 2];
+    struct iovec             iov    [MAX_OUT_BATCH_SIZE * 2];
 };
 
 typedef struct lsquic_conn * (*conn_iter_f)(struct lsquic_engine *);
@@ -154,6 +156,7 @@ struct lsquic_engine
         ENG_CONNS_BY_ADDR
                         = (1 <<  9),    /* Connections are hashed by address */
 #ifndef NDEBUG
+        ENG_COALESCE    = (1 << 10),    /* Packet coalescing is enabled */
         ENG_DTOR        = (1 << 26),    /* Engine destructor */
 #endif
     }                                  flags;
@@ -387,6 +390,9 @@ lsquic_engine_new (unsigned flags,
     engine->pub.enp_stream_if_ctx   = api->ea_stream_if_ctx;
 
     engine->flags           = flags;
+#ifndef NDEBUG
+    engine->flags          |= ENG_COALESCE;
+#endif
     engine->packets_out     = api->ea_packets_out;
     engine->packets_out_ctx = api->ea_packets_out_ctx;
     if (api->ea_hsi_if)
@@ -1196,11 +1202,23 @@ send_batch (lsquic_engine_t *engine, struct conns_out_iter *conns_iter,
 {
     int n_sent, i;
     lsquic_time_t now;
+    unsigned off;
+    size_t count;
+    struct lsquic_packet_out **packet_out, **end;
 
     /* Set sent time before the write to avoid underestimating RTT */
     now = lsquic_time_now();
     for (i = 0; i < (int) n_to_send; ++i)
-        batch->packets[i]->po_sent = now;
+    {
+        off = batch->pack_off[i];
+        count = batch->outs[i].iovlen;
+        assert(count > 0);
+        packet_out = &batch->packets[off];
+        end = packet_out + count;
+        do
+            (*packet_out)->po_sent = now;
+        while (++packet_out < end);
+    }
     n_sent = engine->packets_out(engine->packets_out_ctx, batch->outs,
                                                                 n_to_send);
     if (n_sent < (int) n_to_send)
@@ -1222,31 +1240,57 @@ send_batch (lsquic_engine_t *engine, struct conns_out_iter *conns_iter,
     for (i = 0; i < n_sent; ++i)
     {
         eng_hist_inc(&engine->history, now, sl_packets_out);
-        EV_LOG_PACKET_SENT(lsquic_conn_log_cid(batch->conns[i]),
-                                                    batch->packets[i]);
-        batch->conns[i]->cn_if->ci_packet_sent(batch->conns[i],
-                                                    batch->packets[i]);
         /* `i' is added to maintain relative order */
         batch->conns[i]->cn_last_sent = now + i;
-        /* Release packet out buffer as soon as the packet is sent
-         * successfully.  If not successfully sent, we hold on to
-         * this buffer until the packet sending is attempted again
-         * or until it times out and regenerated.
-         */
-        if (batch->packets[i]->po_flags & PO_ENCRYPTED)
-            release_enc_data(engine, batch->conns[i], batch->packets[i]);
+
+        off = batch->pack_off[i];
+        count = batch->outs[i].iovlen;
+        assert(count > 0);
+        packet_out = &batch->packets[off];
+        end = packet_out + count;
+        do
+        {
+            EV_LOG_PACKET_SENT(lsquic_conn_log_cid(batch->conns[i]),
+                                                        *packet_out);
+            batch->conns[i]->cn_if->ci_packet_sent(batch->conns[i],
+                                                        *packet_out);
+            /* Release packet out buffer as soon as the packet is sent
+             * successfully.  If not successfully sent, we hold on to
+             * this buffer until the packet sending is attempted again
+             * or until it times out and regenerated.
+             */
+            if ((*packet_out)->po_flags & PO_ENCRYPTED)
+                release_enc_data(engine, batch->conns[i], *packet_out);
+        }
+        while (++packet_out < end);
     }
     if (LSQ_LOG_ENABLED_EXT(LSQ_LOG_DEBUG, LSQLM_EVENT))
         for ( ; i < (int) n_to_send; ++i)
-            EV_LOG_PACKET_NOT_SENT(lsquic_conn_log_cid(batch->conns[i]),
-                                                        batch->packets[i]);
+        {
+            off = batch->pack_off[i];
+            count = batch->outs[i].iovlen;
+            assert(count > 0);
+            packet_out = &batch->packets[off];
+            end = packet_out + count;
+            do
+                EV_LOG_PACKET_NOT_SENT(lsquic_conn_log_cid(batch->conns[i]),
+                                                                *packet_out);
+            while (++packet_out < end);
+        }
     /* Return packets to the connection in reverse order so that the packet
      * ordering is maintained.
      */
     for (i = (int) n_to_send - 1; i >= n_sent; --i)
     {
-        batch->conns[i]->cn_if->ci_packet_not_sent(batch->conns[i],
-                                                    batch->packets[i]);
+        off = batch->pack_off[i];
+        count = batch->outs[i].iovlen;
+        assert(count > 0);
+        packet_out = &batch->packets[off + count - 1];
+        end = &batch->packets[off - 1];
+        do
+            batch->conns[i]->cn_if->ci_packet_not_sent(batch->conns[i],
+                                                                *packet_out);
+        while (--packet_out > end);
         if (!(batch->conns[i]->cn_flags & (LSCONN_COI_ACTIVE|LSCONN_EVANESCENT)))
             coi_reactivate(conns_iter, batch->conns[i]);
     }
@@ -1271,6 +1315,22 @@ check_deadline (lsquic_engine_t *engine)
 }
 
 
+static size_t
+iov_size (const struct iovec *iov, const struct iovec *const end)
+{
+    size_t size;
+
+    assert(iov < end);
+
+    size = 0;
+    do
+        size += iov->iov_len;
+    while (++iov < end);
+
+    return size;
+}
+
+
 static void
 send_packets_out (struct lsquic_engine *engine,
                   struct conns_tailq *ticked_conns,
@@ -1279,8 +1339,10 @@ send_packets_out (struct lsquic_engine *engine,
     const lsquic_cid_t *cid;
     unsigned n, w, n_sent, n_batches_sent;
     lsquic_packet_out_t *packet_out;
+    struct lsquic_packet_out **packet;
     lsquic_conn_t *conn;
     struct out_batch *const batch = &engine->out_batch;
+    struct iovec *iov, *packet_iov;
     struct conns_out_iter conns_iter;
     int shrink, deadline_exceeded;
 
@@ -1289,17 +1351,21 @@ send_packets_out (struct lsquic_engine *engine,
     n_sent = 0, n = 0;
     shrink = 0;
     deadline_exceeded = 0;
+    iov = batch->iov;
+    packet = batch->packets;
 
     while ((conn = coi_next(&conns_iter)))
     {
         cid = lsquic_conn_log_cid(conn);
-        packet_out = conn->cn_if->ci_next_packet_to_send(conn);
+        packet_out = conn->cn_if->ci_next_packet_to_send(conn, 0);
         if (!packet_out) {
             LSQ_DEBUGC("batched all outgoing packets for conn %"CID_FMT,
                                                     CID_BITS(cid));
             coi_deactivate(&conns_iter, conn);
             continue;
         }
+        batch->outs[n].iov = packet_iov = iov;
+  next_coa:
         if ((packet_out->po_flags & PO_ENCRYPTED)
                 && lsquic_packet_out_ipv6(packet_out)
                                             != lsquic_conn_peer_ipv6(conn))
@@ -1349,25 +1415,45 @@ send_packets_out (struct lsquic_engine *engine,
         assert(conn->cn_flags & LSCONN_HAS_PEER_SA);
         if (packet_out->po_flags & PO_ENCRYPTED)
         {
-            batch->outs[n].buf     = packet_out->po_enc_data;
-            batch->outs[n].sz      = packet_out->po_enc_data_sz;
+            iov->iov_base          = packet_out->po_enc_data;
+            iov->iov_len           = packet_out->po_enc_data_sz;
         }
         else
         {
-            batch->outs[n].buf     = packet_out->po_data;
-            batch->outs[n].sz      = packet_out->po_data_sz;
+            iov->iov_base          = packet_out->po_data;
+            iov->iov_len           = packet_out->po_data_sz;
         }
-        batch->outs   [n].ecn      = lsquic_packet_out_ecn(packet_out);
-        batch->outs   [n].peer_ctx = conn->cn_peer_ctx;
-        batch->outs   [n].local_sa = (struct sockaddr *) conn->cn_local_addr;
-        batch->outs   [n].dest_sa  = (struct sockaddr *) conn->cn_peer_addr;
-        batch->conns  [n]          = conn;
-        batch->packets[n]          = packet_out;
-        ++n;
-        if (n == engine->batch_size)
+        if (packet_iov == iov)
         {
+            batch->pack_off[n]         = packet - batch->packets;
+            batch->outs   [n].ecn      = lsquic_packet_out_ecn(packet_out);
+            batch->outs   [n].peer_ctx = conn->cn_peer_ctx;
+            batch->outs   [n].local_sa = (struct sockaddr *) conn->cn_local_addr;
+            batch->outs   [n].dest_sa  = (struct sockaddr *) conn->cn_peer_addr;
+            batch->conns  [n]          = conn;
+        }
+        *packet = packet_out;
+        ++packet;
+        ++iov;
+        if (((1 << packet_out->po_header_type)
+            & ((1 << HETY_INITIAL)|(1 << HETY_HANDSHAKE)|(1 << HETY_0RTT)))
+#ifndef NDEBUG
+            && (engine->flags & ENG_COALESCE)
+#endif
+            && iov < batch->iov + sizeof(batch->iov) / sizeof(batch->iov[0]))
+        {
+            const size_t size = iov_size(packet_iov, iov);
+            packet_out = conn->cn_if->ci_next_packet_to_send(conn, size);
+            if (packet_out)
+                goto next_coa;
+        }
+        batch->outs   [n].iovlen = iov - packet_iov;
+        ++n;
+        if (n == engine->batch_size
+            || iov >= batch->iov + sizeof(batch->iov) / sizeof(batch->iov[0]))
+        {
+            w = send_batch(engine, &conns_iter, batch, n);
             n = 0;
-            w = send_batch(engine, &conns_iter, batch, engine->batch_size);
             ++n_batches_sent;
             n_sent += w;
             if (w < engine->batch_size)
@@ -1715,5 +1801,3 @@ lsquic_engine_retire_cid (struct lsquic_engine_public *enpub,
     conn->cn_cces_mask &= ~(1u << cce_idx);
     LSQ_DEBUGC("retire CID %"CID_FMT, CID_BITS(&cce->cce_cid));
 }
-
-

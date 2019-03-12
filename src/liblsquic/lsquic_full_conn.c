@@ -404,8 +404,11 @@ init_ver_neg (struct full_conn *conn, unsigned versions,
 /* If peer supplies odd values, we abort the connection immediately rather
  * that wait for it to finish "naturally" due to inability to send things.
  */
-static void
-conn_on_peer_config (struct full_conn *conn, unsigned peer_cfcw,
+#ifdef NDEBUG
+static
+#endif
+void
+lsquic_full_conn_on_peer_config (struct full_conn *conn, unsigned peer_cfcw,
                      unsigned peer_sfcw, unsigned max_streams_out)
 {
     lsquic_stream_t *stream;
@@ -518,7 +521,7 @@ apply_peer_settings (struct full_conn *conn)
 
     LSQ_DEBUG("peer settings: CFCW: %u; SFCW: %u; MIDS: %u",
         cfcw, sfcw, mids);
-    conn_on_peer_config(conn, cfcw, sfcw, mids);
+    lsquic_full_conn_on_peer_config(conn, cfcw, sfcw, mids);
     return 0;
 }
 
@@ -3146,10 +3149,10 @@ full_conn_ci_packet_in (lsquic_conn_t *lconn, lsquic_packet_in_t *packet_in)
 
 
 static lsquic_packet_out_t *
-full_conn_ci_next_packet_to_send (lsquic_conn_t *lconn)
+full_conn_ci_next_packet_to_send (struct lsquic_conn *lconn, size_t size)
 {
     struct full_conn *conn = (struct full_conn *) lconn;
-    return lsquic_send_ctl_next_packet_to_send(&conn->fc_send_ctl);
+    return lsquic_send_ctl_next_packet_to_send(&conn->fc_send_ctl, 0);
 }
 
 
@@ -3239,6 +3242,18 @@ full_conn_ci_internal_error (struct lsquic_conn *lconn,
 {
     struct full_conn *const conn = (struct full_conn *) lconn;
     LSQ_INFO("Internal error reported");
+    conn->fc_flags |= FC_ERROR;
+}
+
+
+/* This function should not be called, as this is specific to IETF QUIC */
+static void
+full_conn_ci_abort_error (struct lsquic_conn *lconn, int is_app,
+                                unsigned error_code, const char *fmt, ...)
+{
+    struct full_conn *const conn = (struct full_conn *) lconn;
+    assert(0);
+    LSQ_WARN("(GQUIC) abort error is called unexpectedly");
     conn->fc_flags |= FC_ERROR;
 }
 
@@ -3682,6 +3697,7 @@ static const struct headers_stream_callbacks *headers_callbacks_ptr = &headers_c
 
 static const struct conn_iface full_conn_iface = {
     .ci_abort                =  full_conn_ci_abort,
+    .ci_abort_error          =  full_conn_ci_abort_error,
     .ci_can_write_ack        =  full_conn_ci_can_write_ack,
     .ci_cancel_pending_streams
                              =  full_conn_ci_cancel_pending_streams,

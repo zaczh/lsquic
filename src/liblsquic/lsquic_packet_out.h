@@ -66,10 +66,10 @@ typedef struct lsquic_packet_out
     lsquic_packno_t    po_ack2ed;       /* If packet has ACK frame, value of
                                          * largest acked in it.
                                          */
-    enum quic_ft_bit   po_frame_types;  /* Bitmask of QUIC_FRAME_* */
     struct lsquic_packet_out
                       *po_loss_chain;   /* Circular linked list */
 
+    enum quic_ft_bit   po_frame_types;  /* Bitmask of QUIC_FRAME_* */
     enum packet_out_flags {
         PO_HELLO    = (1 << 1),         /* Packet contains SHLO or CHLO data */
         PO_ENCRYPTED= (1 << 3),         /* po_enc_data has encrypted data */

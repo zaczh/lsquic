@@ -12,14 +12,13 @@
 #include "lsquic_types.h"
 #include "lsquic_int_types.h"
 #include "lsquic_sfcw.h"
-#include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hq.h"
 #include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_frab_list.h"
 #include "lsquic_varint.h"
 #include "lsquic_byteswap.h"
-#include "lsquic_hq.h"
 #include "lsquic_hcso_writer.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_HCSO_WRITER

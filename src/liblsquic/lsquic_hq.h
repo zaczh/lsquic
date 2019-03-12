@@ -20,13 +20,23 @@ enum hq_frame_type
 };
 
 
-enum hq_el_type
+enum h3_prio_el_type
 {
-    HQET_REQ_STREAM     = 0,
-    HQET_PUSH_STREAM    = 1,
-    HQET_PLACEHOLDER    = 2,
-    HQET_ROOT           = 3,
+    H3PET_REQ_STREAM    = 0,
+    H3PET_PUSH_STREAM   = 1,
+    H3PET_PLACEHOLDER   = 2,
+    H3PET_CUR_STREAM    = 3,
 };
+
+
+enum h3_dep_el_type
+{
+    H3DET_REQ_STREAM    = 0,
+    H3DET_PUSH_STREAM   = 1,
+    H3DET_PLACEHOLDER   = 2,
+    H3DET_ROOT          = 3,
+};
+
 
 #define HQ_PT_SHIFT 6
 #define HQ_DT_SHIFT 4
@@ -48,12 +58,11 @@ enum hq_setting_id
 
 struct hq_priority
 {
-    lsquic_stream_id_t  hqp_prio_id;
-    lsquic_stream_id_t  hqp_dep_id;
-    enum hq_el_type     hqp_prio_type:8;
-    enum hq_el_type     hqp_dep_type:8;
-    signed char         hqp_exclusive;
-    uint8_t             hqp_weight;
+    lsquic_stream_id_t      hqp_prio_id;
+    lsquic_stream_id_t      hqp_dep_id;
+    enum h3_prio_el_type    hqp_prio_type:8;
+    enum h3_dep_el_type     hqp_dep_type:8;
+    uint8_t                 hqp_weight;
 };
 
 #define HQP_WEIGHT(p) ((p)->hqp_weight + 1)
@@ -66,7 +75,8 @@ enum hq_uni_stream_type
     HQUST_QPACK_DEC = 'h',
 };
 
-extern const char *const lsquic_hqelt2str[];
+extern const char *const lsquic_h3det2str[];
+extern const char *const lsquic_h3pet2str[];
 
 /* [draft-ietf-quic-http-17] Section 8.1 */
 enum http_error_code
@@ -94,5 +104,34 @@ enum http_error_code
     HEC_GENERAL_PROTOCOL_ERROR   =  0x00FF,
     HEC_MALFORMED_FRAME          =  0x0100,    /* add frame type */
 };
+
+
+struct h3_prio_frame_read_state
+{
+    struct varint_read_state    h3pfrs_vint;
+    struct hq_priority          h3pfrs_prio;
+    enum {
+        H3PFRS_STATE_TYPE = 0,
+        H3PFRS_STATE_VINT_BEGIN,
+        H3PFRS_STATE_VINT_CONTINUE,
+        H3PFRS_STATE_WEIGHT,
+    }                           h3pfrs_state;
+    enum {
+        H3PFRS_FLAG_HAVE_PRIO_ID = 1 << 0,
+    }                           h3pfrs_flags;
+};
+
+
+enum h3_prio_frame_read_status
+{
+    H3PFR_STATUS_DONE,
+    H3PFR_STATUS_NEED,
+};
+
+
+/* When first called, h3pfrs_state should be set to 0 */
+enum h3_prio_frame_read_status
+lsquic_h3_prio_frame_read (const unsigned char **, size_t,
+                                            struct h3_prio_frame_read_state *);
 
 #endif

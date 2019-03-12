@@ -1039,11 +1039,6 @@ send_packets_one_by_one (const struct lsquic_out_spec *specs, unsigned count)
         ];
         struct cmsghdr cmsg;
     } ancil;
-#ifndef WIN32
-    struct iovec iov;
-#else
-    WSABUF iov;
-#endif
 
     if (0 == count)
         return 0;
@@ -1072,24 +1067,20 @@ send_packets_one_by_one (const struct lsquic_out_spec *specs, unsigned count)
     {
         sport = specs[n].peer_ctx;
 #ifndef WIN32
-        iov.iov_base = (void *) specs[n].buf;
-        iov.iov_len = specs[n].sz;
         msg.msg_name       = (void *) specs[n].dest_sa;
         msg.msg_namelen    = (AF_INET == specs[n].dest_sa->sa_family ?
                                             sizeof(struct sockaddr_in) :
                                             sizeof(struct sockaddr_in6)),
-        msg.msg_iov        = &iov;
-        msg.msg_iovlen     = 1;
+        msg.msg_iov        = specs[n].iov;
+        msg.msg_iovlen     = specs[n].iovlen;
         msg.msg_flags      = 0;
 #else
-        iov.buf = (void *) specs[n].buf;
-        iov.len = specs[n].sz;
         msg.name           = (void *) specs[n].dest_sa;
         msg.namelen        = (AF_INET == specs[n].dest_sa->sa_family ?
                                             sizeof(struct sockaddr_in) :
                                             sizeof(struct sockaddr_in6)),
-        msg.lpBuffers      = &iov;
-        msg.dwBufferCount  = 1;
+        msg.lpBuffers      = specs[n].iov;
+        msg.dwBufferCount  = specs[n].iovlen;
         msg.dwFlags        = 0;
 #endif
         if (sport->sp_flags & SPORT_SERVER)
@@ -1362,8 +1353,8 @@ set_engine_option (struct lsquic_engine_settings *settings,
             return 0;
         }
         break;
-    case 23:
-        if (0 == strncmp(name, "init_max_stream_data_uni", 23))
+    case 24:
+        if (0 == strncmp(name, "init_max_stream_data_uni", 24))
         {
             settings->es_init_max_stream_data_uni = atoi(val);
             return 0;

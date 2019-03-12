@@ -71,7 +71,7 @@ struct conn_iface
      * for by the congestion controller.
      */
     struct lsquic_packet_out *
-    (*ci_next_packet_to_send) (struct lsquic_conn *);
+    (*ci_next_packet_to_send) (struct lsquic_conn *, size_t);
 
     void
     (*ci_packet_sent) (struct lsquic_conn *, struct lsquic_packet_out *);
@@ -156,6 +156,15 @@ struct conn_iface
 #endif
     ;
 
+    /* Abort connection with error */
+    void
+    (*ci_abort_error) (struct lsquic_conn *, int is_app, unsigned error_code,
+                                                        const char *format, ...)
+#if __GNUC__
+            __attribute__((format(printf, 4, 5)))
+#endif
+    ;
+
     void
     (*ci_tls_alert) (struct lsquic_conn *, uint8_t);
 };
@@ -170,6 +179,9 @@ struct conn_cid_elem
     unsigned                    cce_seqno;
     enum {
         CCE_USED        = 1 << 0,       /* Connection ID has been used */
+        CCE_SEQNO       = 1 << 1,       /* cce_seqno is set (CIDs in Initial
+                                         * packets have no sequence number).
+                                         */
     }                           cce_flags;
 };
 
@@ -211,13 +223,13 @@ struct lsquic_conn
 #define LSCONN_INITIALIZER_CID(lsconn_, cid_) { \
                 .cn_cces = (lsconn_).cn_cces_buf, \
                 .cn_cces_buf[0].cce_seqno = 0, \
-                .cn_cces_buf[0].cce_flags = 0, \
+                .cn_cces_buf[0].cce_flags = CCE_SEQNO, \
                 .cn_cces_buf[0].cce_cid = (cid_), \
                 .cn_n_cces = 8, .cn_cces_mask = 1, }
 #define LSCONN_INITIALIZER_CIDLEN(lsconn_, len_) { \
                 .cn_cces = (lsconn_).cn_cces_buf, \
                 .cn_cces_buf[0].cce_seqno = 0, \
-                .cn_cces_buf[0].cce_flags = 0, \
+                .cn_cces_buf[0].cce_flags = CCE_SEQNO, \
                 .cn_cces_buf[0].cce_cid = { .len = len_ }, \
                 .cn_n_cces = 8, .cn_cces_mask = 1, }
 #define LSCONN_INITIALIZE(lsconn_) do { \

@@ -22,8 +22,8 @@
 #include "lsquic_conn_flow.h"
 #include "lsquic_rtt.h"
 #include "lsquic_sfcw.h"
-#include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hq.h"
 #include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_types.h"
@@ -430,7 +430,7 @@ new_stream_ext (struct test_objs *tobjs, unsigned stream_id, uint64_t send_off)
 static lsquic_stream_t *
 new_stream (struct test_objs *tobjs, unsigned stream_id)
 {
-    return new_stream_ext(tobjs, stream_id, 0);
+    return new_stream_ext(tobjs, stream_id, 16 * 1024);
 }
 
 

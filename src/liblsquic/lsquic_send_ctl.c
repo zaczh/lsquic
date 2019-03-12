@@ -26,8 +26,8 @@
 #include "lsquic_send_ctl.h"
 #include "lsquic_util.h"
 #include "lsquic_sfcw.h"
-#include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hq.h"
 #include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_ver_neg.h"
@@ -1417,7 +1417,7 @@ lsquic_send_ctl_sched_is_blocked (const struct lsquic_send_ctl *ctl)
 
 
 lsquic_packet_out_t *
-lsquic_send_ctl_next_packet_to_send (lsquic_send_ctl_t *ctl)
+lsquic_send_ctl_next_packet_to_send (struct lsquic_send_ctl *ctl, size_t size)
 {
     lsquic_packet_out_t *packet_out;
     int dec_limit;
@@ -1438,7 +1438,6 @@ lsquic_send_ctl_next_packet_to_send (lsquic_send_ctl_t *ctl)
     else
         dec_limit = 0;
 
-    send_ctl_sched_remove(ctl, packet_out);
     if (packet_out->po_flags & PO_REPACKNO)
     {
         if (packet_out->po_regen_sz < packet_out->po_data_sz)
@@ -1450,11 +1449,21 @@ lsquic_send_ctl_next_packet_to_send (lsquic_send_ctl_t *ctl)
         {
             LSQ_DEBUG("Dropping packet %"PRIu64" from scheduled queue",
                 packet_out->po_packno);
+            send_ctl_sched_remove(ctl, packet_out);
             send_ctl_destroy_chain(ctl, packet_out, NULL);
             send_ctl_destroy_packet(ctl, packet_out);
             goto get_packet;
         }
     }
+
+    if (UNLIKELY(size))
+    {
+        if (packet_out_total_sz(packet_out) + size > ctl->sc_pack_size)
+            return NULL;
+        LSQ_DEBUG("packet %"PRIu64" will be tacked on to previous packet "
+                                    "(coalescing)", packet_out->po_packno);
+    }
+    send_ctl_sched_remove(ctl, packet_out);
 
     if (dec_limit)
     {
@@ -1964,17 +1973,28 @@ lsquic_send_ctl_ack_to_front (lsquic_send_ctl_t *ctl)
 void
 lsquic_send_ctl_drop_scheduled (lsquic_send_ctl_t *ctl)
 {
-    lsquic_packet_out_t *packet_out;
-    const unsigned n = ctl->sc_n_scheduled;
-    while ((packet_out = TAILQ_FIRST(&ctl->sc_scheduled_packets)))
+    struct lsquic_packet_out *packet_out, *next;
+    unsigned n;
+
+    n = 0;
+    for (packet_out = TAILQ_FIRST(&ctl->sc_scheduled_packets); packet_out;
+                                                            packet_out = next)
     {
-        send_ctl_sched_remove(ctl, packet_out);
-        send_ctl_destroy_chain(ctl, packet_out, NULL);
-        send_ctl_destroy_packet(ctl, packet_out);
+        next = TAILQ_NEXT(packet_out, po_next);
+        if (0 == (packet_out->po_flags & PO_HELLO))
+        {
+            send_ctl_sched_remove(ctl, packet_out);
+            send_ctl_destroy_chain(ctl, packet_out, NULL);
+            send_ctl_destroy_packet(ctl, packet_out);
+            ++n;
+        }
     }
-    assert(0 == ctl->sc_n_scheduled);
-    ctl->sc_cur_packno = lsquic_senhist_largest(&ctl->sc_senhist);
-    LSQ_DEBUG("dropped %u scheduled packet%s", n, n != 1 ? "s" : "");
+
+    if (0 == ctl->sc_n_scheduled)
+        ctl->sc_cur_packno = lsquic_senhist_largest(&ctl->sc_senhist);
+
+    LSQ_DEBUG("dropped %u scheduled packet%s (%u left)", n, n != 1 ? "s" : "",
+        ctl->sc_n_scheduled);
 }
 
 

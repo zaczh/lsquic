@@ -260,8 +260,21 @@ struct parse_funcs
     int
     (*pf_parse_retire_cid_frame) (const unsigned char *buf, size_t, uint64_t *);
     int
-    (*pf_parse_max_streams_frame) (const unsigned char *, size_t,
-                                                enum stream_dir *, uint64_t *);
+    (*pf_gen_streams_blocked_frame) (unsigned char *buf, size_t buf_len,
+                                        enum stream_dir, uint64_t);
+    int
+    (*pf_parse_streams_blocked_frame) (const unsigned char *buf, size_t buf_len,
+                                        enum stream_dir *, uint64_t *);
+    unsigned
+    (*pf_streams_blocked_frame_size) (uint64_t);
+    int
+    (*pf_gen_max_streams_frame) (unsigned char *buf, size_t buf_len,
+                                        enum stream_dir, uint64_t);
+    int
+    (*pf_parse_max_streams_frame) (const unsigned char *buf, size_t buf_len,
+                                        enum stream_dir *, uint64_t *);
+    unsigned
+    (*pf_max_streams_frame_size) (uint64_t);
 };
 
 extern const struct parse_funcs lsquic_parse_funcs_gquic_le;

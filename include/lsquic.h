@@ -680,8 +680,8 @@ lsquic_engine_check_settings (const struct lsquic_engine_settings *settings,
 
 struct lsquic_out_spec
 {
-    const unsigned char   *buf;
-    size_t                 sz;
+    struct iovec          *iov;
+    size_t                 iovlen;
     const struct sockaddr *local_sa;
     const struct sockaddr *dest_sa;
     void                  *peer_ctx;

@@ -13,13 +13,13 @@
 #include "lsquic_types.h"
 #include "lsquic_int_types.h"
 #include "lsquic_sfcw.h"
-#include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hq.h"
 #include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_frab_list.h"
 #include "lsqpack.h"
-#include "lsquic_hq.h"
+#include "lsquic_conn.h"
 #include "lsquic_qenc_hdl.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_QENC_HDL
@@ -48,7 +48,7 @@ qeh_begin_out (struct qpack_enc_hdl *qeh)
 
 
 void
-lsquic_qeh_init (struct qpack_enc_hdl *qeh, const struct lsquic_conn *conn)
+lsquic_qeh_init (struct qpack_enc_hdl *qeh, struct lsquic_conn *conn)
 {
     assert(!(qeh->qeh_flags & QEH_INITIALIZED));
     qeh->qeh_conn = conn;
@@ -230,11 +230,21 @@ qeh_in_on_read (struct lsquic_stream *stream, lsquic_stream_ctx_t *ctx)
     ssize_t nread;
 
     nread = lsquic_stream_readf(stream, qeh_read_decoder_stream, qeh);
-    if (nread < 0)
+    if (nread <= 0)
     {
-        LSQ_WARN("cannot read from decoder stream");
+        if (nread < 0)
+        {
+            LSQ_WARN("cannot read from encoder stream: %s", strerror(errno));
+            qeh->qeh_conn->cn_if->ci_internal_error(qeh->qeh_conn,
+                                        "cannot read from encoder stream");
+        }
+        else
+        {
+            LSQ_INFO("encoder stream closed by peer: abort connection");
+            qeh->qeh_conn->cn_if->ci_abort_error(qeh->qeh_conn, 1,
+                HEC_CLOSED_CRITICAL_STREAM, "encoder stream closed");
+        }
         lsquic_stream_wantread(stream, 0);
-        /* TODO: abort connection */
     }
 }
 

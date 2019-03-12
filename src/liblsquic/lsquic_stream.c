@@ -35,8 +35,8 @@
 #include "lsquic_conn_flow.h"
 #include "lsquic_rtt.h"
 #include "lsquic_sfcw.h"
-#include "lsquic_hq.h"
 #include "lsquic_varint.h"
+#include "lsquic_hq.h"
 #include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_conn_public.h"
@@ -57,7 +57,6 @@
 #include "lsquic_enc_sess.h"
 #include "lsqpack.h"
 #include "lsquic_frab_list.h"
-#include "lsquic_hq.h"
 #include "lsquic_http1x_if.h"
 #include "lsquic_qdec_hdl.h"
 #include "lsquic_qenc_hdl.h"
@@ -432,8 +431,6 @@ lsquic_stream_new (lsquic_stream_id_t id,
     }
 
     lsquic_sfcw_init(&stream->fc, initial_window, cfcw, conn_pub, id);
-    if (!initial_send_off)
-        initial_send_off = 16 * 1024;
     stream->max_send_off = initial_send_off;
     LSQ_DEBUG("created stream");
     SM_HISTORY_APPEND(stream, SHE_CREATED);
@@ -463,6 +460,7 @@ lsquic_stream_new_crypto (enum enc_level enc_level,
 
     stream->stream_flags |= STREAM_CRYPTO|STREAM_IETF;
     stream->sm_enc_level = enc_level;
+    /* TODO: why have limit in crypto stream?  Set it to UINT64_MAX? */
     lsquic_sfcw_init(&stream->fc, 16 * 1024, NULL, conn_pub, stream_id);
     stream->max_send_off = 16 * 1024;
     LSQ_DEBUG("created crypto stream");
@@ -702,9 +700,15 @@ stream_write_avail (struct lsquic_stream *stream)
     uint64_t stream_avail, conn_avail;
     size_t hq_frames_sz;
 
-    hq_frames_sz = active_hq_frame_sizes(stream);
     stream_avail = stream->max_send_off - stream->tosend_off
-                                    - stream->sm_n_buffered - hq_frames_sz;
+                                                - stream->sm_n_buffered;
+
+    hq_frames_sz = active_hq_frame_sizes(stream);
+    if (stream_avail > hq_frames_sz)
+        stream_avail -= hq_frames_sz;
+    else
+        stream_avail = 0;
+
     if (stream->stream_flags & STREAM_CONN_LIMITED)
     {
         conn_avail = lsquic_conn_cap_avail(&stream->conn_pub->conn_cap);

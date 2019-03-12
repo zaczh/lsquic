@@ -135,18 +135,18 @@ static const struct trapa_test tests[] =
                 .srst = "\x30\x31\x32\x33\x34\x35\x36\x37\x38\x39\x3A\x3B\x3C\x3D\x3E\x3F",
             },
         },
-        .enc_len = 0x3F + 7,
+        .enc_len = 0x3E + 7,
         .encoded =
             /* Version */   DRAFT_17_VERSION
         /* N supported */   "\x00"
-     /* Overall length */   "\x00\x3F"
+     /* Overall length */   "\x00\x3E"
      /* Preferred Address */"\x00\x0D"
-                            "\x00\x35"
+                            "\x00\x34"
                             "\x01\x02\x03\x04"
                             "\x12\x34"
                             "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F"
                             "\x90\x01"
-                            "\x00\x0B"  /* CID len */
+                            "\x0B"  /* CID len */
                             "\x20\x21\x22\x23\x24\x25\x26\x27\x28\x29\x2A"
                             "\x30\x31\x32\x33\x34\x35\x36\x37\x38\x39\x3A\x3B\x3C\x3D\x3E\x3F"
      /* Packet size */      "\x00\x03\x00\x02\x43\x33"
