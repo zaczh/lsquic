@@ -43,6 +43,7 @@ enum lsquic_conn_flags {
     LSCONN_SEND_BLOCKED   = (1 <<15),   /* Send connection blocked frame */
     LSCONN_NEVER_TICKABLE = (1 <<17),   /* Do not put onto the Tickable Queue */
     LSCONN_ATTQ           = (1 <<19),
+    LSCONN_IETF           = (1 <<23),
 };
 
 /* A connection may have things to send and be closed at the same time.
