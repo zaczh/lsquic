@@ -1416,6 +1416,39 @@ lsquic_send_ctl_sched_is_blocked (const struct lsquic_send_ctl *ctl)
 }
 
 
+static void
+send_ctl_maybe_zero_pad (struct lsquic_send_ctl *ctl,
+                        struct lsquic_packet_out *initial_packet, size_t limit)
+{
+    struct lsquic_packet_out *packet_out;
+    size_t cum_size, size;
+
+    cum_size = packet_out_total_sz(initial_packet);
+    if (cum_size >= limit)
+        return;
+
+    TAILQ_FOREACH(packet_out, &ctl->sc_scheduled_packets, po_next)
+    {
+        size = packet_out_total_sz(packet_out);
+        if (cum_size + size > ctl->sc_pack_size)
+            break;
+        cum_size += size;
+        if (cum_size >= limit)
+            return;
+    }
+
+    assert(cum_size < limit);
+    size = limit - cum_size;
+    if (size > lsquic_packet_out_avail(initial_packet))
+        size = lsquic_packet_out_avail(initial_packet);
+    memset(initial_packet->po_data + initial_packet->po_data_sz, 0, size);
+    initial_packet->po_data_sz += size;
+    initial_packet->po_frame_types |= QUIC_FTBIT_PADDING;
+    LSQ_DEBUG("Added %zu bytes of PADDING to packet %"PRIu64, size,
+                                                initial_packet->po_packno);
+}
+
+
 lsquic_packet_out_t *
 lsquic_send_ctl_next_packet_to_send (struct lsquic_send_ctl *ctl, size_t size)
 {
@@ -1473,10 +1506,10 @@ lsquic_send_ctl_next_packet_to_send (struct lsquic_send_ctl *ctl, size_t size)
     else
         packet_out->po_flags &= ~PO_LIMITED;
 
-    if ((packet_out->po_flags & PO_HELLO)
-                        && packet_out->po_n_alloc > packet_out->po_data_sz
-                        && !(packet_out->po_frame_types & QUIC_FTBIT_PADDING))
-        lsquic_packet_out_zero_pad(packet_out);
+    if (UNLIKELY(packet_out->po_header_type == HETY_INITIAL) )
+    {
+        send_ctl_maybe_zero_pad(ctl, packet_out, size ? size : 1200);
+    }
 
     return packet_out;
 }
@@ -1564,8 +1597,17 @@ send_ctl_allocate_packet (struct lsquic_send_ctl *ctl, enum packno_bits bits,
         return NULL;
     }
 
-    if (UNLIKELY(pns == PNS_INIT && ctl->sc_token))
-        send_ctl_set_packet_out_token(ctl, packet_out);
+    if (UNLIKELY(pns != PNS_APP))
+    {
+        if (pns == PNS_INIT)
+        {
+            packet_out->po_header_type = HETY_INITIAL;
+            if (ctl->sc_token)
+                send_ctl_set_packet_out_token(ctl, packet_out);
+        }
+        else
+            packet_out->po_header_type = HETY_HANDSHAKE;
+    }
 
     lsquic_packet_out_set_pns(packet_out, pns);
     packet_out->po_flags |= ctl->sc_ecn << POECN_SHIFT;
@@ -1645,12 +1687,13 @@ lsquic_send_ctl_get_writeable_packet (lsquic_send_ctl_t *ctl,
 }
 
 
-static struct lsquic_packet_out *
-send_ctl_get_packet_for_crypto (struct lsquic_send_ctl *ctl,
+struct lsquic_packet_out *
+lsquic_send_ctl_get_packet_for_crypto (struct lsquic_send_ctl *ctl,
                               unsigned need_at_least, enum packnum_space pns)
 {
     struct lsquic_packet_out *packet_out;
 
+    assert(lsquic_send_ctl_schedule_stream_packets_immediately(ctl));
     assert(need_at_least > 0);
 
     packet_out = lsquic_send_ctl_last_scheduled(ctl, pns);
@@ -2189,41 +2232,6 @@ send_ctl_get_buffered_packet (lsquic_send_ctl_t *ctl,
 }
 
 
-static struct lsquic_packet_out *
-send_ctl_get_buffered_packet_for_crypto (struct lsquic_send_ctl *ctl,
-                            unsigned need_at_least, enum packnum_space pns)
-{
-    const enum buf_packet_type packet_type = BPT_HIGHEST_PRIO;
-    struct buf_packet_q *const packet_q =
-                                        &ctl->sc_buffered_packets[packet_type];
-    struct lsquic_packet_out *packet_out;
-    enum packno_bits bits;
-
-    TAILQ_FOREACH_REVERSE(packet_out, &packet_q->bpq_packets,
-                                                lsquic_packets_tailq, po_next)
-        if (lsquic_packet_out_pns(packet_out) == pns
-            && !(packet_out->po_flags & PO_STREAM_END)
-            && lsquic_packet_out_avail(packet_out) >= need_at_least)
-        {
-            return packet_out;
-        }
-
-    if (packet_q->bpq_count >= send_ctl_max_bpq_count(ctl, packet_type))
-        return NULL;
-
-    bits = lsquic_send_ctl_guess_packno_bits(ctl);
-    packet_out = send_ctl_allocate_packet(ctl, bits, need_at_least, pns);
-    if (!packet_out)
-        return NULL;
-
-    TAILQ_INSERT_TAIL(&packet_q->bpq_packets, packet_out, po_next);
-    ++packet_q->bpq_count;
-    LSQ_DEBUG("Add new packet to buffered queue #%u; count: %u",
-              packet_type, packet_q->bpq_count);
-    return packet_out;
-}
-
-
 lsquic_packet_out_t *
 lsquic_send_ctl_get_packet_for_stream (lsquic_send_ctl_t *ctl,
                 unsigned need_at_least, const struct lsquic_stream *stream)
@@ -2248,17 +2256,6 @@ lsquic_send_ctl_buffered_and_same_prio_as_headers (struct lsquic_send_ctl *ctl,
 {
     return !lsquic_send_ctl_schedule_stream_packets_immediately(ctl)
         && BPT_HIGHEST_PRIO == send_ctl_lookup_bpt(ctl, stream);
-}
-
-
-struct lsquic_packet_out *
-lsquic_send_ctl_get_packet_for_crypto (struct lsquic_send_ctl *ctl,
-                                unsigned need_at_least, enum packnum_space pns)
-{
-    if (lsquic_send_ctl_schedule_stream_packets_immediately(ctl))
-        return send_ctl_get_packet_for_crypto(ctl, need_at_least, pns);
-    else
-        return send_ctl_get_buffered_packet_for_crypto(ctl, need_at_least, pns);
 }
 
 
@@ -2353,6 +2350,20 @@ lsquic_send_ctl_schedule_buffered (lsquic_send_ctl_t *ctl,
     while ((packet_out = TAILQ_FIRST(&packet_q->bpq_packets)) &&
                                             lsquic_send_ctl_can_send(ctl))
     {
+        if ((packet_out->po_frame_types & QUIC_FTBIT_ACK)
+                            && packet_out->po_ack2ed < ctl->sc_largest_acked)
+        {
+            LSQ_DEBUG("Remove out-of-order ACK from buffered packet");
+            lsquic_packet_out_chop_regen(packet_out);
+            if (packet_out->po_data_sz == 0)
+            {
+                LSQ_DEBUG("Dropping now-empty buffered packet");
+                TAILQ_REMOVE(&packet_q->bpq_packets, packet_out, po_next);
+                --packet_q->bpq_count;
+                send_ctl_destroy_packet(ctl, packet_out);
+                continue;
+            }
+        }
         if (bits != lsquic_packet_out_packno_bits(packet_out))
         {
             used = pf->pf_packno_bits2len(

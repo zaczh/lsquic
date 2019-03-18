@@ -1172,7 +1172,15 @@ stream_readf (struct lsquic_stream *stream,
             && !stream->uh)
     {
         if (stream->sm_readable(stream))
+        {
+            if (stream->sm_hq_filter.hqfi_flags & HQFI_FLAG_ERROR)
+            {
+                LSQ_INFO("HQ filter hit an error: cannot read from stream");
+                errno = EBADMSG;
+                return -1;
+            }
             assert(stream->uh);
+        }
         else
         {
             errno = EWOULDBLOCK;
@@ -2401,6 +2409,7 @@ stream_write_to_packet_hsk (struct frame_gen_ctx *fg_ctx, const size_t size)
     if (len > 0)
     {
         packet_out->po_flags |= PO_HELLO;
+        lsquic_packet_out_zero_pad(packet_out);
         lsquic_send_ctl_scheduled_one(send_ctl, packet_out);
         return SWTP_OK;
     }
@@ -2541,10 +2550,19 @@ maybe_close_varsize_hq_frame (struct lsquic_stream *stream)
 
     bits = (shf->shf_flags & SHF_TWO_BYTES) > 0;
     size = stream->sm_payload - shf->shf_off;
-    LSQ_DEBUG("close HQ frame type 0x%X of size %"PRIu64,
-                                            shf->shf_frame_type, size);
-    vint_write(shf->shf_frame_ptr, size, bits, 1 << bits);
-    shf->shf_frame_ptr[ 1 << bits ] = shf->shf_frame_type;
+    if (size)
+    {
+        LSQ_DEBUG("close HQ frame type 0x%X of size %"PRIu64,
+                                                shf->shf_frame_type, size);
+        vint_write(shf->shf_frame_ptr, size, bits, 1 << bits);
+        shf->shf_frame_ptr[ 1 << bits ] = shf->shf_frame_type;
+    }
+    else
+    {
+        assert(!shf->shf_frame_ptr);
+        LSQ_DEBUG("discard zero-sized HQ frame type 0x%X (off: %"PRIu64")",
+                                        shf->shf_frame_type, shf->shf_off);
+    }
     memset(shf, 0, sizeof(*shf));
 
     if (stream->sm_n_buffered)
@@ -3579,6 +3597,7 @@ hq_filter_readable_now (const struct lsquic_stream *stream)
 
     return (filter->hqfi_type == HQFT_DATA
                     && filter->hqfi_state == HQFI_STATE_READING_PAYLOAD)
+        || (filter->hqfi_flags & HQFI_FLAG_ERROR)
         || stream->uh
         || (stream->stream_flags & STREAM_FIN_REACHED)
     ;

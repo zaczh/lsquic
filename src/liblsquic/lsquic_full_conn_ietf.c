@@ -791,7 +791,8 @@ generate_ack_frame_for_pns (struct ietf_full_conn *conn,
     LSQ_DEBUG("ACK bytes: %s", buf);
     EV_LOG_GENERATED_ACK_FRAME(LSQUIC_LOG_CONN_ID, conn->ifc_conn.cn_pf,
                         packet_out->po_data + packet_out->po_data_sz, w);
-    lsquic_send_ctl_scheduled_ack(&conn->ifc_send_ctl, pns);
+    lsquic_send_ctl_scheduled_ack(&conn->ifc_send_ctl, pns,
+                                                    packet_out->po_ack2ed);
     packet_out->po_frame_types |= 1 << QUIC_FRAME_ACK;
     lsquic_send_ctl_incr_pack_sz(&conn->ifc_send_ctl, packet_out, w);
     packet_out->po_regen_sz += w;

@@ -37,6 +37,7 @@
 #include "lsquic_version.h"
 #include "lsquic_ver_neg.h"
 #include "lsquic_byteswap.h"
+#include "lsquic_frab_list.h"
 
 #if __GNUC__
 #   define UNLIKELY(cond) __builtin_expect(cond, 0)
@@ -183,6 +184,7 @@ struct enc_sess_iquic
         ESI_LOG_SECRETS  = 1 << 1,
         ESI_HANDSHAKE_OK = 1 << 2,
         ESI_ODCID        = 1 << 3,
+        ESI_ON_WRITE     = 1 << 4,
     }                    esi_flags;
     enum evp_aead_direction_t
                          esi_dir[2];        /* client, server */
@@ -192,6 +194,10 @@ struct enc_sess_iquic
     const unsigned char *esi_alpn;
     unsigned char       *esi_zero_rtt_buf;
     size_t               esi_zero_rtt_sz;
+    /* We never use the first two levels, so it seems we could reduce the
+     * memory requirement here at the cost of adding some code.
+     */
+    struct frab_list     esi_frals[N_ENC_LEVS];
 };
 
 
@@ -494,6 +500,18 @@ maybe_create_SSL_SESSION (struct enc_sess_iquic *enc_sess,
 }
 
 
+static void
+init_frals (struct enc_sess_iquic *enc_sess)
+{
+    struct frab_list *fral;
+
+    for (fral = enc_sess->esi_frals; fral < enc_sess->esi_frals
+            + sizeof(enc_sess->esi_frals) / sizeof(enc_sess->esi_frals[0]);
+                ++fral)
+        lsquic_frab_list_init(fral, 0x100, NULL, NULL, NULL);
+}
+
+
 static enc_session_t *
 iquic_esfi_create_client (const char *hostname,
             struct lsquic_engine_public *enpub, struct lsquic_conn *lconn,
@@ -540,6 +558,8 @@ iquic_esfi_create_client (const char *hostname,
             LSQ_DEBUG("will %slog secrets", atoi(log) ? "" : "not ");
         }
     }
+
+    init_frals(enc_sess);
 
     if (0 != setup_handshake_keys(enc_sess, &lconn->cn_dcid))
     {
@@ -1102,7 +1122,12 @@ static void
 iquic_esfi_destroy (enc_session_t *enc_session_p)
 {
     struct enc_sess_iquic *const enc_sess = enc_session_p;
+    struct frab_list *fral;
     LSQ_DEBUG("destroy");
+    for (fral = enc_sess->esi_frals; fral < enc_sess->esi_frals
+            + sizeof(enc_sess->esi_frals) / sizeof(enc_sess->esi_frals[0]);
+                ++fral)
+        lsquic_frab_list_cleanup(fral);
     if (enc_sess->esi_keylog_handle)
         enc_sess->esi_enpub->enp_kli->kli_close(enc_sess->esi_keylog_handle);
     if (enc_sess->esi_ssl)
@@ -1604,7 +1629,21 @@ cry_sm_write_message (SSL *ssl, enum ssl_encryption_level_t level,
     if (!stream)
         return 0;
 
-    nw = enc_sess->esi_cryst_if->csi_write(stream, data, len);
+    if (enc_sess->esi_flags & ESI_ON_WRITE)
+        nw = enc_sess->esi_cryst_if->csi_write(stream, data, len);
+    else
+    {
+        LSQ_DEBUG("not in on_write event: buffer in a frab list");
+        if (0 == lsquic_frab_list_write(&enc_sess->esi_frals[level], data, len))
+        {
+            if (!lsquic_frab_list_empty(&enc_sess->esi_frals[level]))
+                enc_sess->esi_cryst_if->csi_wantwrite(stream, 1);
+            nw = len;
+        }
+        else
+            nw = -1;
+    }
+
     if (nw >= 0 && (size_t) nw == len)
     {
         enc_sess->esi_last_w = (enum enc_level) level;
@@ -1637,8 +1676,15 @@ cry_sm_flush_flight (SSL *ssl)
     if (!stream)
         return 0;
 
-    s = enc_sess->esi_cryst_if->csi_flush(stream);
-    return s == 0;
+    if (lsquic_frab_list_empty(&enc_sess->esi_frals[level]))
+    {
+        s = enc_sess->esi_cryst_if->csi_flush(stream);
+        return s == 0;
+    }
+    else
+        /* Frab list will get flushed */    /* TODO: add support for
+        recording flush points in frab list. */
+        return 1;
 }
 
 
@@ -1718,18 +1764,20 @@ shake_stream (struct enc_sess_iquic *enc_sess,
 {
     enum iquic_handshake_status st;
     enum enc_level enc_level;
+    int write;
 
     if (0 == (enc_sess->esi_flags & ESI_HANDSHAKE_OK))
         st = iquic_esfi_handshake(enc_sess);
     else
         st = iquic_esfi_post_handshake(enc_sess);
     enc_level = enc_sess->esi_cryst_if->csi_enc_level(stream);
-    LSQ_DEBUG("enc leven %s after %s: %s", lsquic_enclev2str[enc_level], what,
+    LSQ_DEBUG("enc level %s after %s: %s", lsquic_enclev2str[enc_level], what,
                                                                 ihs2str[st]);
     switch (st)
     {
     case IHS_WANT_READ:
-        enc_sess->esi_cryst_if->csi_wantwrite(stream, 0);
+        write = !lsquic_frab_list_empty(&enc_sess->esi_frals[enc_level]);
+        enc_sess->esi_cryst_if->csi_wantwrite(stream, write);
         enc_sess->esi_cryst_if->csi_wantread(stream, 1);
         break;
     case IHS_WANT_WRITE:
@@ -1738,7 +1786,8 @@ shake_stream (struct enc_sess_iquic *enc_sess,
         break;
     default:
         assert(st == IHS_STOP);
-        enc_sess->esi_cryst_if->csi_wantwrite(stream, 0);
+        write = !lsquic_frab_list_empty(&enc_sess->esi_frals[enc_level]);
+        enc_sess->esi_cryst_if->csi_wantwrite(stream, write);
         enc_sess->esi_cryst_if->csi_wantread(stream, 0);
         break;
     }
@@ -1799,11 +1848,48 @@ chsk_ietf_on_read (struct lsquic_stream *stream, lsquic_stream_ctx_t *ctx)
 
 
 static void
+maybe_write_from_fral (struct enc_sess_iquic *enc_sess,
+                                                struct lsquic_stream *stream)
+{
+    enum enc_level enc_level = enc_sess->esi_cryst_if->csi_enc_level(stream);
+    struct frab_list *const fral = &enc_sess->esi_frals[enc_level];
+    struct lsquic_reader reader = {
+        .lsqr_read  = lsquic_frab_list_read,
+        .lsqr_size  = lsquic_frab_list_size,
+        .lsqr_ctx   = fral,
+    };
+    ssize_t nw;
+
+    if (lsquic_frab_list_empty(fral))
+        return;
+
+    nw = lsquic_stream_writef(stream, &reader);
+    if (nw >= 0)
+    {
+        LSQ_DEBUG("wrote %zd bytes to stream from frab list", nw);
+        (void) lsquic_stream_flush(stream);
+        if (lsquic_frab_list_empty(fral))
+            lsquic_stream_wantwrite(stream, 0);
+    }
+    else
+    {
+        /* TODO: abort connection */
+        LSQ_WARN("cannot write to stream: %s", strerror(errno));
+        lsquic_stream_wantwrite(stream, 0);
+    }
+}
+
+
+static void
 chsk_ietf_on_write (struct lsquic_stream *stream, lsquic_stream_ctx_t *ctx)
 {
     struct enc_sess_iquic *const enc_sess = (void *) ctx;
 
+    maybe_write_from_fral(enc_sess, stream);
+
+    enc_sess->esi_flags |= ESI_ON_WRITE;
     shake_stream(enc_sess, stream, "on_write");
+    enc_sess->esi_flags &= ~ESI_ON_WRITE;
 }
 
 

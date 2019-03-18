@@ -2854,11 +2854,14 @@ main_test_packetization (void)
     {
         int once;
         unsigned write_size;
-        for (write_size = 1; write_size < GQUIC_MAX_PACKET_SZ; ++write_size)
-            test_packetization(0, 0, write_size, fp_sizes[i]);
-        srand(7891);
-        for (write_size = 1; write_size < GQUIC_MAX_PACKET_SZ * 10; ++write_size)
-            test_packetization(0, 0, RANDOM_WRITE_SIZE, fp_sizes[i]);
+        if (!g_use_crypto_ctor) /* No buffered packets for CRYPTO frames */
+        {
+            for (write_size = 1; write_size < GQUIC_MAX_PACKET_SZ; ++write_size)
+                test_packetization(0, 0, write_size, fp_sizes[i]);
+            srand(7891);
+            for (write_size = 1; write_size < GQUIC_MAX_PACKET_SZ * 10; ++write_size)
+                test_packetization(0, 0, RANDOM_WRITE_SIZE, fp_sizes[i]);
+        }
         for (once = 0; once < 2; ++once)
         {
             for (write_size = 1; write_size < GQUIC_MAX_PACKET_SZ; ++write_size)
