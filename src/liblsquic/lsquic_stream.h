@@ -224,6 +224,13 @@ struct lsquic_stream
     /** If @ref SMQF_WANT_FLUSH is set, flush until this offset. */
     uint64_t                        sm_flush_to;
 
+    /**
+     * If @ref SMQF_WANT_FLUSH is set, this indicates payload offset
+     * to flush to.  Used to adjust @ref sm_flush_to when H3 frame
+     * size grows.
+     */
+    uint64_t                        sm_flush_to_payload;
+
     /* Last offset sent in BLOCKED frame */
     uint64_t                        blocked_off;
 
@@ -296,7 +303,7 @@ enum stream_ctor_flags
 lsquic_stream_t *
 lsquic_stream_new (lsquic_stream_id_t id, struct lsquic_conn_public *,
                    const struct lsquic_stream_if *, void *stream_if_ctx,
-                   unsigned initial_sfrw, unsigned initial_send_off,
+                   unsigned initial_sfrw, uint64_t initial_send_off,
                    enum stream_ctor_flags);
 
 struct lsquic_stream *

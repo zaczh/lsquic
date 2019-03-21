@@ -230,6 +230,7 @@ struct ietf_full_conn
     struct conn_err             ifc_error;
     unsigned                    ifc_n_delayed_streams;
     unsigned                    ifc_n_cons_unretx;
+    int                         ifc_spin_bit;
     const struct lsquic_stream_if
                                *ifc_stream_if;
     void                       *ifc_stream_ctx;
@@ -1646,7 +1647,8 @@ handshake_ok (struct lsquic_conn *lconn)
         }
     }
 
-    conn->ifc_cfg.max_stream_send = params.tp_init_max_stream_data_bidi_remote;
+        conn->ifc_cfg.max_stream_send
+                                = params.tp_init_max_stream_data_bidi_remote;
     conn->ifc_cfg.ack_exp = params.tp_ack_delay_exponent;
 
     /* TODO: idle timeout, packet size */
@@ -2117,7 +2119,12 @@ static struct lsquic_packet_out *
 ietf_full_conn_ci_next_packet_to_send (struct lsquic_conn *lconn, size_t size)
 {
     struct ietf_full_conn *conn = (struct ietf_full_conn *) lconn;
-    return lsquic_send_ctl_next_packet_to_send(&conn->ifc_send_ctl, size);
+    struct lsquic_packet_out *packet_out;
+
+    packet_out = lsquic_send_ctl_next_packet_to_send(&conn->ifc_send_ctl, size);
+    if (packet_out)
+        lsquic_packet_out_set_spin_bit(packet_out, conn->ifc_spin_bit);
+    return packet_out;
 }
 
 
@@ -3556,6 +3563,9 @@ on_dcid_change (struct ietf_full_conn *conn, const lsquic_cid_t *dcid_in)
     dces[1] = NULL;
     conn->ifc_send_flags |= SF_SEND_RETIRE_CID;
 
+    /* Reset spin bit, see [draft-ietf-quic-spin-exp-01] Section 2.3 */
+    conn->ifc_spin_bit = 0;
+
     return 0;
 }
 
@@ -3585,7 +3595,7 @@ process_regular_packet (struct ietf_full_conn *conn,
     enum received_st st;
     enum dec_packin dec_packin;
     enum quic_ft_bit frame_types;
-    int was_missing;
+    int was_missing, packno_increased;
 
     if (HETY_RETRY == packet_in->pi_header_type)
         return process_retry_packet(conn, packet_in);
@@ -3643,6 +3653,8 @@ process_regular_packet (struct ietf_full_conn *conn,
 
     EV_LOG_PACKET_IN(LSQUIC_LOG_CONN_ID, packet_in);
 
+    packno_increased = packet_in->pi_packno
+                > lsquic_rechist_largest_packno(&conn->ifc_rechist[pns]);
     st = lsquic_rechist_received(&conn->ifc_rechist[pns], packet_in->pi_packno,
                                                     packet_in->pi_received);
     switch (st) {
@@ -3677,6 +3689,10 @@ process_regular_packet (struct ietf_full_conn *conn,
         conn->ifc_incoming_ecn |=
                             lsquic_packet_in_ecn(packet_in) != ECN_NOT_ECT;
         ++conn->ifc_ecn_counts_in[pns][ lsquic_packet_in_ecn(packet_in) ];
+        if (packno_increased && PNS_APP == pns)
+        {
+            conn->ifc_spin_bit = !lsquic_packet_in_spin_bit(packet_in);
+        }
         return 0;
     case REC_ST_DUP:
         LSQ_INFO("packet %"PRIu64" is a duplicate", packet_in->pi_packno);

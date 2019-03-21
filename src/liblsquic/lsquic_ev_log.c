@@ -54,9 +54,11 @@ lsquic_ev_log_packet_in (const lsquic_cid_t *cid,
         LCID("packet in: %"PRIu64, packet_in->pi_packno);
         break;
     default:
-        LCID("packet in: %"PRIu64", type: %s, ecn: %u",
+        LCID("packet in: %"PRIu64", type: %s, ecn: %u, spin: %d",
             packet_in->pi_packno, lsquic_hety2str[packet_in->pi_header_type],
-            lsquic_packet_in_ecn(packet_in));
+            lsquic_packet_in_ecn(packet_in),
+            /* spin bit value is only valid for short packet headers */
+            lsquic_packet_in_spin_bit(packet_in));
         break;
     }
 }
@@ -206,7 +208,7 @@ lsquic_ev_log_packet_sent (const lsquic_cid_t *cid,
                                                 packet_out->po_frame_types));
     else
         LCID("sent packet %"PRIu64", type %s, crypto: %s, size %hu, frame "
-            "types: %s, ecn: %u",
+            "types: %s, ecn: %u, spin: %d",
             packet_out->po_packno, lsquic_hety2str[packet_out->po_header_type],
             lsquic_enclev2str[ lsquic_packet_out_enc_level(packet_out) ],
             packet_out->po_enc_data_sz,
@@ -216,7 +218,9 @@ lsquic_ev_log_packet_sent (const lsquic_cid_t *cid,
                  */
                 lsquic_frame_types_to_str(frames, sizeof(frames),
                                                 packet_out->po_frame_types),
-                lsquic_packet_out_ecn(packet_out));
+                lsquic_packet_out_ecn(packet_out),
+                /* spin bit value is only valid for short packet headers */
+                lsquic_packet_out_spin_bit(packet_out));
 }
 
 

@@ -375,8 +375,7 @@ lsquic_stream_t *
 lsquic_stream_new (lsquic_stream_id_t id,
         struct lsquic_conn_public *conn_pub,
         const struct lsquic_stream_if *stream_if, void *stream_if_ctx,
-        /* TODO: these should be uint64_t now */
-        unsigned initial_window, unsigned initial_send_off,
+        unsigned initial_window, uint64_t initial_send_off,
         enum stream_ctor_flags ctor_flags)
 {
     lsquic_cfcw_t *cfcw;
@@ -703,18 +702,18 @@ stream_write_avail (struct lsquic_stream *stream)
     stream_avail = stream->max_send_off - stream->tosend_off
                                                 - stream->sm_n_buffered;
 
+    if (stream->stream_flags & STREAM_CONN_LIMITED)
+    {
+        conn_avail = lsquic_conn_cap_avail(&stream->conn_pub->conn_cap);
+        if (conn_avail < stream_avail)
+            stream_avail = conn_avail;
+    }
+
     hq_frames_sz = active_hq_frame_sizes(stream);
     if (stream_avail > hq_frames_sz)
         stream_avail -= hq_frames_sz;
     else
         stream_avail = 0;
-
-    if (stream->stream_flags & STREAM_CONN_LIMITED)
-    {
-        conn_avail = lsquic_conn_cap_avail(&stream->conn_pub->conn_cap);
-        if (conn_avail < stream_avail)
-            return conn_avail;
-    }
 
     return stream_avail;
 }
@@ -1886,7 +1885,11 @@ stream_flush (lsquic_stream_t *stream)
 static int
 stream_flush_nocheck (lsquic_stream_t *stream)
 {
-    stream->sm_flush_to = stream->tosend_off + stream->sm_n_buffered;
+    size_t frames;
+
+    frames = active_hq_frame_sizes(stream);
+    stream->sm_flush_to = stream->tosend_off + stream->sm_n_buffered + frames;
+    stream->sm_flush_to_payload = stream->sm_payload + stream->sm_n_buffered;
     maybe_put_onto_write_q(stream, SMQF_WANT_FLUSH);
     LSQ_DEBUG("will flush up to offset %"PRIu64, stream->sm_flush_to);
 
@@ -1950,9 +1953,18 @@ lsquic_stream_flush_threshold (const struct lsquic_stream *stream,
     if ((stream->stream_flags & (STREAM_USE_HEADERS|STREAM_HEADERS_SENT))   \
                                                    == STREAM_USE_HEADERS)   \
     {                                                                       \
-        LSQ_INFO("Attempt to write to stream before sending HTTP headers"); \
-        errno = EILSEQ;                                                     \
-        return -1;                                                          \
+        if (SSHS_HBLOCK_SENDING == stream->sm_send_headers_state)           \
+        {                                                                   \
+            LSQ_DEBUG("still sending headers: no writing allowed");         \
+            return 0;                                                       \
+        }                                                                   \
+        else                                                                \
+        {                                                                   \
+            LSQ_INFO("Attempt to write to stream before sending HTTP "      \
+                                                                "headers"); \
+            errno = EILSEQ;                                                 \
+            return -1;                                                      \
+        }                                                                   \
     }                                                                       \
     if (lsquic_stream_is_reset(stream))                                     \
     {                                                                       \
@@ -2079,12 +2091,11 @@ frame_hq_gen_size (void *ctx)
 
     /* Make sure we are not writing past available size: */
     remaining = fg_ctx->fgc_reader->lsqr_size(fg_ctx->fgc_reader->lsqr_ctx);
-    remaining += frames;
     available = lsquic_stream_write_avail(stream);
     if (available < remaining)
         remaining = available;
 
-    return remaining + stream->sm_n_buffered;
+    return remaining + stream->sm_n_buffered + frames;
 }
 
 
@@ -2271,8 +2282,6 @@ frame_hq_gen_read (void *ctx, void *begin_buf, size_t len, int *fin)
         {
             frame_sz = stream_hq_frame_size(shf);
             if (frame_sz > (uintptr_t) (end - p))
-                break;
-            if (frame_sz > avail)
                 break;
             LSQ_DEBUG("insert %zu-byte HQ frame of type 0x%X at payload "
                 "offset %"PRIu64" (actual offset %"PRIu64")", frame_sz,
@@ -2549,28 +2558,38 @@ maybe_close_varsize_hq_frame (struct lsquic_stream *stream)
         return;
 
     bits = (shf->shf_flags & SHF_TWO_BYTES) > 0;
-    size = stream->sm_payload - shf->shf_off;
-    if (size)
+    size = stream->sm_payload + stream->sm_n_buffered - shf->shf_off;
+    if (size && size <= VINT_MAX_B(bits))
     {
-        LSQ_DEBUG("close HQ frame type 0x%X of size %"PRIu64,
+        if (0 == stream->sm_n_buffered)
+            LSQ_DEBUG("close HQ frame type 0x%X of size %"PRIu64,
+                                                shf->shf_frame_type, size);
+        else
+            LSQ_DEBUG("convert HQ frame type 0x%X of to fixed %"PRIu64,
                                                 shf->shf_frame_type, size);
         vint_write(shf->shf_frame_ptr, size, bits, 1 << bits);
         shf->shf_frame_ptr[ 1 << bits ] = shf->shf_frame_type;
+        if (0 == stream->sm_n_buffered)
+            memset(shf, 0, sizeof(*shf));
+        else
+        {
+            shf->shf_frame_size = size;
+            shf->shf_flags |= SHF_FIXED_SIZE;
+        }
+    }
+    else if (!size)
+    {
+        assert(!shf->shf_frame_ptr);
+        LSQ_WARN("discard zero-sized HQ frame type 0x%X (off: %"PRIu64")",
+                                        shf->shf_frame_type, shf->shf_off);
+        memset(shf, 0, sizeof(*shf));
     }
     else
     {
-        assert(!shf->shf_frame_ptr);
-        LSQ_DEBUG("discard zero-sized HQ frame type 0x%X (off: %"PRIu64")",
-                                        shf->shf_frame_type, shf->shf_off);
-    }
-    memset(shf, 0, sizeof(*shf));
-
-    if (stream->sm_n_buffered)
-    {
-        assert(0);
-        (void) /* XXX return status */
-        stream_activate_hq_frame(stream, stream->sm_payload,
-                            HQFT_DATA, 0, stream->sm_n_buffered);
+        assert(stream->sm_n_buffered);
+        LSQ_ERROR("cannot close frame of size %zu -- too large", size);
+        /* TODO: abort connection */
+        memset(shf, 0, sizeof(*shf));
     }
 }
 
@@ -2707,40 +2726,41 @@ update_buffered_hq_frames (struct lsquic_stream *stream, size_t len,
                                                                 size_t avail)
 {
     struct stream_hq_frame *shf;
+    struct stream_hq_frame *const shf_end = stream->sm_hq_frames
+            + sizeof(stream->sm_hq_frames) / sizeof(stream->sm_hq_frames[0]);
     uint64_t cur_off, end;
     size_t frame_sz;
     int frame_idx, extendable;
 
     cur_off = stream->sm_payload + stream->sm_n_buffered;
-    for (shf = stream->sm_hq_frames; shf < stream->sm_hq_frames
-            + sizeof(stream->sm_hq_frames) / sizeof(stream->sm_hq_frames[0]);
-                                                                        ++shf)
+    for (shf = stream->sm_hq_frames; shf < shf_end; ++shf)
         if ((shf->shf_flags & SHF_ACTIVE) && shf->shf_off <= cur_off)
         {
             end = stream_hq_frame_end(shf);
             extendable = stream_hq_frame_extendable(shf, cur_off, len);
             if (cur_off < end + extendable)
-                goto found;
+                break;
         }
 
-    /* Not found */
-    if (avail < 3)
+    if (shf < shf_end)
+        frame_sz = stream_hq_frame_size(shf);
+    else if (avail >= 3)
+    {
+        frame_idx = stream_activate_hq_frame(stream, cur_off, HQFT_DATA, 0, len);
+        assert(frame_idx >= 0);
+        /* TODO: check return value */
+        shf = &stream->sm_hq_frames[frame_idx];
+        extendable = 0;
+        frame_sz = stream_hq_frame_size(shf);
+        if (avail < frame_sz)
+            return 0;
+        avail -= frame_sz;
+    }
+    else
         return 0;
-    frame_idx = stream_activate_hq_frame(stream, cur_off, HQFT_DATA, 0, len);
-    assert(frame_idx >= 0);
-    /* TODO: check return value */
-    shf = &stream->sm_hq_frames[frame_idx];
-    extendable = 0;
 
-  found:
-    frame_sz = stream_hq_frame_size(shf);
-    if (avail < frame_sz)
-        return 0;
-    avail -= frame_sz;
     if (!(shf->shf_flags & SHF_CC_PAID))
     {
-        if (avail < frame_sz + 1)
-            return 0;
         incr_conn_cap(stream, frame_sz);
         shf->shf_flags |= SHF_CC_PAID;
     }
@@ -2749,6 +2769,10 @@ update_buffered_hq_frames (struct lsquic_stream *stream, size_t len,
         shf->shf_flags |= SHF_TWO_BYTES;
         incr_conn_cap(stream, 1);
         avail -= 1;
+        if ((stream->sm_qflags & SMQF_WANT_FLUSH)
+                && shf->shf_off <= stream->sm_payload
+                && stream_hq_frame_end(shf) >= stream->sm_flush_to_payload)
+            stream->sm_flush_to += 1;
     }
 
     if (len <= avail)
@@ -2943,6 +2967,9 @@ send_headers_ietf (struct lsquic_stream *stream,
     unsigned char *header_block;
     unsigned char buf[max_prefix_size + MAX_HEADERS_SIZE];
 
+    /* TODO: Optimize for the common case: write directly to sm_buf and fall
+     * back to a larger buffer if that fails.
+     */
     prefix_sz = max_prefix_size;
     headers_sz = sizeof(buf) - max_prefix_size;
     qwh = lsquic_qeh_write_headers(stream->conn_pub->u.ietf.qeh, stream->id, 0,
@@ -3514,7 +3541,8 @@ hq_read (void *ctx, const unsigned char *buf, size_t sz, int fin)
             else
                 break;
         case HQFI_STATE_READING_PAYLOAD:
-            assert(filter->hqfi_type != HQFT_DATA);
+            if (filter->hqfi_type == HQFT_DATA)
+                goto end;
             sz = filter->hqfi_left;
             if (sz > (uintptr_t) (end - p))
                 sz = (uintptr_t) (end - p);

@@ -113,6 +113,8 @@ typedef struct lsquic_packet_out
          */
         PO_UNACKED  = (1 <<28),         /* On unacked queue */
         PO_LOST     = (1 <<29),         /* On lost queue */
+#define POSPIN_SHIFT 30
+        PO_SPIN_BIT = (1 <<30),         /* Value of the spin bit */
     }                  po_flags;
     unsigned short     po_data_sz;      /* Number of usable bytes in data */
     unsigned short     po_enc_data_sz;  /* Number of usable bytes in data */
@@ -176,7 +178,13 @@ typedef struct lsquic_packet_out
     (p)->po_flags |= ((b) & 1) << POIPv6_SHIFT;                         \
 } while (0)
 
-#define lsquic_packet_out_spin_bit(p) 0 /* TODO */
+#define lsquic_packet_out_spin_bit(p) (((p)->po_flags & PO_SPIN_BIT) > 0)
+
+#define lsquic_packet_out_set_spin_bit(p, b) do {                       \
+    (p)->po_flags &= ~PO_SPIN_BIT;                                      \
+    (p)->po_flags |= ((b) & 1) << POSPIN_SHIFT;                         \
+} while (0)
+
 #define lsquic_packet_out_key_phase(p) 0    /* TODO */
 
 #define lsquic_po_header_length(lconn, po_flags) ( \

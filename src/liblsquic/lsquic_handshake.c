@@ -118,6 +118,7 @@ typedef struct hs_ctx_st
     
     struct lsquic_str csct;
     struct lsquic_str crt; /* compressed certs buffer */
+    struct lsquic_str scfg_pubs; /* Need to copy PUBS, as KEXS comes after it */
 } hs_ctx_t;
 
 
@@ -510,6 +511,7 @@ lsquic_enc_session_destroy (enc_session_t *enc_session_p)
     lsquic_str_d(&hs_ctx->prof);
     lsquic_str_d(&hs_ctx->csct);
     lsquic_str_d(&hs_ctx->crt);
+    lsquic_str_d(&hs_ctx->scfg_pubs);
     lsquic_str_d(&enc_session->chlo);
     lsquic_str_d(&enc_session->sstk);
     lsquic_str_d(&enc_session->ssno);
@@ -647,18 +649,10 @@ static int parse_hs_data (struct lsquic_enc_session *enc_session, uint32_t tag,
         break;
 
     case QTAG_PUBS:
-        /* FIXME:Server side may send a list of pubs,
-         * we support only ONE kenx now.
-         * REJ is 35 bytes, SHLO is 32 bytes
-         * Only save other peer's pubs to hs_ctx
-         */
-        if( len < 32)
-            break;
-        memcpy(hs_ctx->pubs, val + (len - 32), 32);
         if (head_tag == QTAG_SCFG)
-        {
-            memcpy(enc_session->info->spubs, hs_ctx->pubs, 32);
-        }
+            lsquic_str_setto(&hs_ctx->scfg_pubs, val, len);
+        else if (len == 32)
+            memcpy(hs_ctx->pubs, val, len);
         break;
 
     case QTAG_RCID:
@@ -708,7 +702,61 @@ static int parse_hs_data (struct lsquic_enc_session *enc_session, uint32_t tag,
         break;
 
     case QTAG_KEXS:
-        enc_session->info->kexs = get_tag_value_i32(val, len);
+    {
+            if (head_tag == QTAG_SCFG && 0 == len % 4)
+            {
+                const unsigned char *p, *end;
+                unsigned pub_idx, idx;
+#ifdef WIN32
+                pub_idx = 0;
+#endif
+
+                for (p = val; p < val + len; p += 4)
+                    if (0 == memcmp(p, "C255", 4))
+                    {
+                        memcpy(&enc_session->info->kexs, p, 4);
+                        pub_idx = (p - val) / 4;
+                        LSQ_DEBUG("Parsing SCFG: supported KEXS C255 at "
+                                                        "index %u", pub_idx);
+                        break;
+                    }
+                if (p >= val + len)
+                {
+                    LSQ_INFO("supported KEXS not found, trouble ahead");
+                    break;
+                }
+                if (lsquic_str_len(&hs_ctx->scfg_pubs) > 0)
+                {
+                    p = (const unsigned char *)
+                                        lsquic_str_cstr(&hs_ctx->scfg_pubs);
+                    end = p + lsquic_str_len(&hs_ctx->scfg_pubs);
+
+                    for (idx = 0; p < end; ++idx)
+                    {
+                        uint32_t sz = 0;
+                        if (p + 3 > end)
+                            break;
+                        sz |= *p++;
+                        sz |= *p++ << 8;
+                        sz |= *p++ << 16;
+                        if (p + sz > end)
+                            break;
+                        if (idx == pub_idx)
+                        {
+                            if (sz == 32)
+                            {
+                                memcpy(hs_ctx->pubs, p, 32);
+                                memcpy(enc_session->info->spubs, p, 32);
+                            }
+                            break;
+                        }
+                        p += sz;
+                    }
+                }
+                else
+                    LSQ_INFO("No PUBS from SCFG to parse");
+            }
+        }
         break;
 
     case QTAG_NONC:

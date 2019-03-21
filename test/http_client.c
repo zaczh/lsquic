@@ -530,7 +530,7 @@ send_headers (lsquic_stream_ctx_t *st_h)
         },
         {
             .name  = { .iov_base = ":scheme",       .iov_len = 7, },
-            .value = { .iov_base = "HTTP",          .iov_len = 4, }
+            .value = { .iov_base = "https",         .iov_len = 5, }
         },
         {
             .name  = { .iov_base = ":path",         .iov_len = 5, },
@@ -693,7 +693,7 @@ http_client_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
                 st_h->sh_flags |= PROCESSED_HEADERS;
             }
             if (!s_discard_response)
-                (void) write(STDOUT_FILENO, buf, nread);
+                fwrite(buf, 1, nread, stdout);
             if (randomly_reprioritize_streams && (st_h->count++ & 0x3F) == 0)
             {
                 old_prio = lsquic_stream_priority(stream);

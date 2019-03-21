@@ -168,6 +168,7 @@ struct conn_iface
 
     void
     (*ci_tls_alert) (struct lsquic_conn *, uint8_t);
+
 };
 
 #define LSCONN_CCE_BITS 3

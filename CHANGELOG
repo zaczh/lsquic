@@ -1,3 +1,24 @@
+2019-03-19
+    - 1.19.6
+    - [BUGFIX] Ensure that Largest Observed does not decrease in ACKs we
+      send.  ACK frames placed in packets in buffered queues (optimization
+      introduced in 1.17.15) can be preceded by an ACK frame generated later.
+      In this case, the older ACK frame should not be sent out, as Chromium-
+      based servers flags decrease in the ACK frame's Largest Observed value
+      as an error.
+
+2019-03-05
+    - 1.19.5
+    - [BUGFIX] Use correct public key from PUBS based on KEXS index.
+    - [BUGFIX] Check flags before dispatching writes, avoiding assert.
+    - [BUGFIX] Set :scheme to "https" (instead of "HTTP").
+
+2019-02-25
+    - 1.19.4
+    - [BUGFIX] Check buffer bounds when looking up version in 0-RTT blob.
+    - [BUGFIX] http_client: don't fetch 0-rtt info if handshake failed.
+    - Log number of pacer calls at DEBUG, rather than NOTICE, level.
+
 2019-02-18
     - 1.19.3
     - [BUGFIX] Q044: don't encode packet number in 6 bytes.  Six-byte

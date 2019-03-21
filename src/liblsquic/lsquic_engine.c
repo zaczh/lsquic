@@ -481,6 +481,8 @@ update_stats_sum (struct lsquic_engine *engine, struct lsquic_conn *conn)
 #endif
 
 
+
+
 /* Wrapper to make sure important things occur before the connection is
  * really destroyed.
  */

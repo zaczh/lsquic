@@ -4,9 +4,6 @@
 
 #define VINT_MASK ((1 << 6) - 1)
 
-/* Maximum value that can be encoded as one byte: */
-#define VINT_MAX_ONE_BYTE VINT_MASK
-
 /* See [draft-ietf-quic-transport-11], section-7.1 */
 #define vint_val2bits(val) (    \
     (val >= (1 << 6)) + (val >= (1 << 14)) + (val >= (1 << 30)))
@@ -20,6 +17,11 @@
  *  3 -> 62
  */
 #define vint_bits2shift(bits) ((1 << (3 + (bits))) - 2)
+
+#define VINT_MAX_B(bits_) ((1ull << (vint_bits2shift(bits_))) - 1)
+
+/* Maximum value that can be encoded as one byte: */
+#define VINT_MAX_ONE_BYTE VINT_MAX_B(1)
 
 int
 lsquic_varint_read (const unsigned char *p, const unsigned char *end,

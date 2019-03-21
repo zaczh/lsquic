@@ -1,25 +1,97 @@
 /* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 #include <assert.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
+
+#include <openssl/rand.h>
 
 #include "lsquic.h"
 #include "lsquic_int_types.h"
 #include "lsquic_logger.h"
 #include "lsquic_purga.h"
 
+#define MIN_CID_LEN 4
+
+static void
+bloom_test (unsigned count, unsigned searches)
+{
+    struct lsquic_purga *purga;
+    struct purga_bloom_stats *stats;
+    struct purga_el *puel;
+    lsquic_cid_t *cids, cid;
+    unsigned i, j;
+
+    cids = malloc(count * sizeof(cids[0]));
+    assert(cids);
+
+    for (i = 0; i < count; ++i)
+    {
+        cids[i].len = MIN_CID_LEN + rand() % (MAX_CID_LEN - MIN_CID_LEN);
+        RAND_bytes(cids[i].idbuf, cids[i].len);
+    }
+
+    purga = lsquic_purga_new(~0, NULL, NULL);
+
+    /* Add CIDs */
+    for (i = 0; i < count; ++i)
+        lsquic_purga_add(purga, &cids[i], NULL, 0, 0);
+
+    /* Check that they are all there */
+    for (i = 0; i < count; ++i)
+    {
+        puel = lsquic_purga_contains(purga, &cids[i]);
+        assert(puel);
+    }
+
+    /* Generate random CIDs and check that they are not found: */
+    for (i = 0; i < searches; ++i)
+    {
+        cid.len = MIN_CID_LEN + rand() % (MAX_CID_LEN - MIN_CID_LEN);
+        RAND_bytes(cid.idbuf, cid.len);
+        puel = lsquic_purga_contains(purga, &cid);
+        if (puel)
+        {
+            for (j = 0; j < count; ++j)
+                if (LSQUIC_CIDS_EQ(&cids[j], &cid))
+                    break;
+            assert(j < count);
+        }
+    }
+
+    stats = lsquic_purga_get_bloom_stats(purga);
+    LSQ_NOTICE("searches: %lu, false hits: %lu, false hit ratio: %lf",
+        stats->searches, stats->false_hits,
+        (double) stats->false_hits / (double) stats->searches);
+
+    lsquic_purga_destroy(purga);
+    free(cids);
+}
+
+
 int
 main (int argc, char **argv)
 {
     int opt;
-    unsigned i, per_page;
+    unsigned i, per_page, bloom_ins = 0, bloom_sea = 0;
     lsquic_cid_t cid;
     struct lsquic_purga *purga;
+    struct purga_el *puel;
 
-    while (-1 != (opt = getopt(argc, argv, "v")))
+    while (-1 != (opt = getopt(argc, argv, "b:l:s:v")))
     {
         switch (opt)
         {
+        case 'b':
+            bloom_ins = atoi(optarg);
+            break;
+        case 's':
+            bloom_sea = atoi(optarg);
+            break;
+        case 'l':
+            lsquic_log_to_fstream(stderr, 0);
+            lsquic_logger_lopt(optarg);
+            break;
         case 'v':
             lsquic_log_to_fstream(stderr, 0);
             lsquic_logger_lopt("purga=debug");
@@ -29,23 +101,39 @@ main (int argc, char **argv)
         }
     }
 
+    if (bloom_ins)
+    {
+        if (!bloom_sea)
+            bloom_sea = bloom_ins * 10;
+        LSQ_NOTICE("bloom test: will insert %u and search for %u CIDs",
+                                                        bloom_ins, bloom_sea);
+        bloom_test(bloom_ins, bloom_sea);
+        exit(EXIT_SUCCESS);
+    }
+
     per_page = lsquic_purga_cids_per_page();
     purga = lsquic_purga_new(10, NULL, NULL);
     assert(purga);
 
-    cid.len = 2;
+    cid.len = 3;
     for (i = 0; i < per_page; ++i)
     {
-        cid.idbuf[0] = 0;
-        cid.idbuf[1] = i;
-        lsquic_purga_add(purga, &cid, NULL, PUTY_CONN_DELETED, 20);
+        cid.idbuf[0] = i >> 16;
+        cid.idbuf[1] = i >> 8;
+        cid.idbuf[2] = i;
+        puel = lsquic_purga_add(purga, &cid, NULL, PUTY_CONN_DELETED, 20);
+        assert(puel);
+        lsquic_purga_el_set_data(puel, ~i);
     }
 
     for (i = 0; i < per_page; ++i)
     {
-        cid.idbuf[0] = 0;
-        cid.idbuf[1] = i;
-        assert(PUTY_CONN_DELETED == lsquic_purga_contains(purga, &cid));
+        cid.idbuf[0] = i >> 16;
+        cid.idbuf[1] = i >> 8;
+        cid.idbuf[2] = i;
+        puel = lsquic_purga_contains(purga, &cid);
+        assert(puel && PUTY_CONN_DELETED == lsquic_purga_el_get_type(puel));
+        assert(~i == lsquic_purga_el_get_data(puel));
     }
 
     ++cid.idbuf[1];
@@ -53,13 +141,20 @@ main (int argc, char **argv)
 
     for (i = 0; i < per_page; ++i)
     {
-        cid.idbuf[0] = 0;
-        cid.idbuf[1] = i;
-        assert(PUTY_NOT_FOUND == lsquic_purga_contains(purga, &cid));
+        cid.idbuf[0] = i >> 16;
+        cid.idbuf[1] = i >> 8;
+        cid.idbuf[2] = i;
+        puel = lsquic_purga_contains(purga, &cid);
+        assert(!puel);
     }
 
     ++cid.idbuf[1];
-    assert(PUTY_CONN_DELETED == lsquic_purga_contains(purga, &cid));
+    puel = lsquic_purga_contains(purga, &cid);
+    assert(puel && PUTY_CONN_DELETED == lsquic_purga_el_get_type(puel));
+
+    lsquic_purga_destroy(purga);
+
+    bloom_test(20000, 200000);
 
     exit(EXIT_SUCCESS);
 }

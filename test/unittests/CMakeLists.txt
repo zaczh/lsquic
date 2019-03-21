@@ -42,6 +42,7 @@ SET(TESTS
     frame_writer
     goaway_gquic_be
     goaway_gquic_le
+    h3_framing
     hkdf
     lsquic_hash
     malo

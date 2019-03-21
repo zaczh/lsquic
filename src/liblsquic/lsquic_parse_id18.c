@@ -1689,7 +1689,8 @@ lsquic_ID18_parse_packet_in_short_begin (struct lsquic_packet_in *packet_in,
     memcpy(packet_in->pi_dcid.idbuf, packet_in->pi_data + 1, cid_len);
     packet_in->pi_dcid.len = cid_len;
     packet_in->pi_flags |= PI_CONN_ID;
-    packet_in->pi_flags |= ((byte & 0x20) > 0) << PIBIT_KEY_PHASE_SHIFT;
+    packet_in->pi_flags |= ((byte & 0x04) > 0) << PIBIT_KEY_PHASE_SHIFT;
+    packet_in->pi_flags |= ((byte & 0x20) > 0) << PIBIT_SPIN_SHIFT;
 
     packet_in->pi_header_sz     = header_sz;
     packet_in->pi_data_sz       = length;

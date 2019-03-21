@@ -7,10 +7,15 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
+#include "lsquic.h"
 #include "lsquic_types.h"
 #include "lsquic_sizes.h"
+#include "lsquic_logger.h"
 #include "lsquic_trans_params.h"
 
 #define ENC_BUF_SZ 0x1000
@@ -201,10 +206,53 @@ run_test (const struct trapa_test *test)
 }
 
 
+static void
+decode_file (const char *name)
+{
+    FILE *file;
+    size_t nread;
+    int s;
+    struct transport_params params;
+    unsigned char buf[0x1000];
+
+    file = fopen(name, "rb");
+    if (!file)
+    {
+        perror("fopen");
+        exit(1);
+    }
+
+    nread = fread(buf, 1, sizeof(buf), file);
+
+    s = lsquic_tp_decode(buf, nread, params);
+
+    fclose(file);
+
+    printf("decoded params from %s: %d (%s)\n", name, s, s > 0 ? "OK" : "FAIL");
+}
+
+
 int
-main (void)
+main (int argc, char **argv)
 {
     unsigned i;
+    int opt;
+
+    while (-1 != (opt = getopt(argc, argv, "d:l:")))
+    {
+        switch (opt)
+        {
+        case 'd':
+            decode_file(optarg);
+            return 0;
+        case 'l':
+            lsquic_log_to_fstream(stderr, 0);
+            lsquic_logger_lopt(optarg);
+            break;
+        default:
+            exit(1);
+        }
+    }
 
     for (i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i)
         run_test(&tests[i]);

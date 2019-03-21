@@ -254,11 +254,19 @@ lsquic_tp_decode (const unsigned char *const buf, size_t bufsz,
         /* If we need to support parameter IDs 31 and up, we will need to
          * change this code:
          */
-        if (param_id > sizeof(set_of_ids) * 8)
-            return -1;
-        if (set_of_ids & (1 << param_id))
-            return -1;
-        set_of_ids |= 1 << param_id;
+        if (param_id < sizeof(set_of_ids) * 8)
+        {
+            /* Only check duplicates for IDs <= 31 and are thus not
+             * compliant with the spec -- see
+             *
+             * [draft-ietf-quic-transport-18] Section 7.3
+             */
+            if (set_of_ids & (1 << param_id))
+                return -1;
+            set_of_ids |= 1 << param_id;
+        }
+        else
+            goto unknown;
         if (NUMERIC_TRANS_PARAMS & (1u << param_id))
         {
             switch (len)
@@ -355,6 +363,7 @@ lsquic_tp_decode (const unsigned char *const buf, size_t bufsz,
                 params->tp_flags |= TRAPA_PREFERRED_ADDR;
                 break;
             }
+  unknown:
             p += len;
         }
     }

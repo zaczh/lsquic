@@ -69,7 +69,7 @@ typedef struct lsquic_packet_in
         PI_ECN_BIT_0    = (1 << 9),
         PI_ECN_BIT_1    = (1 <<10),
 #define PIBIT_SPIN_SHIFT 11
-        PI_SPIN         = (1 <<11),
+        PI_SPIN_BIT     = (1 <<11),
     }                               pi_flags:16;
     /* pi_token and pi_token_size are set in Initial and Retry packets */
     unsigned short                  pi_token_size; /* Size of the token */
@@ -116,6 +116,8 @@ typedef struct lsquic_packet_in
 
 #define lsquic_packet_in_ecn(p) \
     (((p)->pi_flags >> PIBIT_ECN_SHIFT) & 0x3)
+
+#define lsquic_packet_in_spin_bit(p) (((p)->pi_flags & PI_SPIN_BIT) > 0)
 
 /* The version iterator is used on a version negotiation packet only.
  * The iterator functions return 1 when next version is returned and
