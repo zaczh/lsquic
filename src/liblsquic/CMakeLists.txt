@@ -54,6 +54,7 @@ SET(lsquic_STAT_SRCS
     lsquic_min_heap.c
     ../lshpack/lshpack.c
     lsquic_parse_Q044.c
+    lsquic_parse_Q046.c
     lsquic_http1x_if.c
     lsquic_trans_params.c
     lsquic_hkdf.c

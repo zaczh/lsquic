@@ -1698,7 +1698,7 @@ process_stop_waiting_frame (struct full_conn *conn, lsquic_packet_in_t *packet_i
     enum packno_bits bits;
     int parsed_len;
 
-    bits = gquic_packet_in_packno_bits(packet_in);
+    bits = lsquic_packet_in_packno_bits(packet_in);
 
     if (conn->fc_flags & FC_NSTP)
     {
@@ -1977,11 +1977,13 @@ reconstruct_packet_number (struct full_conn *conn, lsquic_packet_in_t *packet_in
 {
     lsquic_packno_t cur_packno, max_packno;
     enum packno_bits bits;
+    unsigned packet_len;
 
     cur_packno = packet_in->pi_packno;
     max_packno = lsquic_rechist_largest_packno(&conn->fc_rechist);
-    bits = gquic_packet_in_packno_bits(packet_in);
-    packet_in->pi_packno = restore_packno(cur_packno, bits, max_packno);
+    bits = lsquic_packet_in_packno_bits(packet_in);
+    packet_len = conn->fc_conn.cn_pf->pf_packno_bits2len(bits);
+    packet_in->pi_packno = restore_packno(cur_packno, packet_len, max_packno);
     LSQ_DEBUG("reconstructed (bits: %u, packno: %"PRIu64", max: %"PRIu64") "
         "to %"PRIu64"", bits, cur_packno, max_packno, packet_in->pi_packno);
 }
@@ -2411,15 +2413,15 @@ generate_stop_waiting_frame (struct full_conn *conn)
     lsquic_packet_out_t *packet_out;
 
     /* Get packet that has room for the minimum size STOP_WAITING frame: */
-    packet_out = get_writeable_packet(conn,
-                                1 + gquic_packno_bits2len(GQUIC_PACKNO_LEN_1));
+    packnum_len = conn->fc_conn.cn_pf->pf_packno_bits2len(GQUIC_PACKNO_LEN_1);
+    packet_out = get_writeable_packet(conn, 1 + packnum_len);
     if (!packet_out)
         return;
 
     /* Now calculate number of bytes we really need.  If there is not enough
      * room in the current packet, get a new one.
      */
-    packnum_len = gquic_packno_bits2len(
+    packnum_len = conn->fc_conn.cn_pf->pf_packno_bits2len(
                                     lsquic_packet_out_packno_bits(packet_out));
     if ((unsigned) lsquic_packet_out_avail(packet_out) < 1 + packnum_len)
     {

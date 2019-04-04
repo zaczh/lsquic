@@ -76,7 +76,7 @@ typedef size_t (*gcf_read_f) (void *stream, void *buf, size_t len);
 /* This structure contains functions that parse and generate packets and
  * frames in version-specific manner.  To begin with, there is difference
  * between GQUIC's little-endian (Q038 and lower) and big-endian formats
- * (Q039 and higher).  Q044 uses different format for packet headers.
+ * (Q039 and higher).  Q044 and higher uses different format for packet headers.
  */
 struct parse_funcs
 {
@@ -281,6 +281,7 @@ extern const struct parse_funcs lsquic_parse_funcs_gquic_le;
 /* Q039 and later are big-endian: */
 extern const struct parse_funcs lsquic_parse_funcs_gquic_Q039;
 extern const struct parse_funcs lsquic_parse_funcs_gquic_Q044;
+extern const struct parse_funcs lsquic_parse_funcs_gquic_Q046;
 extern const struct parse_funcs lsquic_parse_funcs_id18;
 
 #define select_pf_by_ver(ver) (                                             \
@@ -289,6 +290,8 @@ extern const struct parse_funcs lsquic_parse_funcs_id18;
                                          &lsquic_parse_funcs_gquic_Q039 :   \
     (1 << (ver)) & ((1 << LSQVER_044)|LSQUIC_EXPERIMENTAL_Q098) ?           \
                                          &lsquic_parse_funcs_gquic_Q044 :   \
+    (1 << (ver)) & ((1 << LSQVER_046))                          ?           \
+                                         &lsquic_parse_funcs_gquic_Q046 :   \
     &lsquic_parse_funcs_id18)
 
 /* This function is gQUIC-version independent */

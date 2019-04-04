@@ -1416,6 +1416,9 @@ lsqpack_enc_end_header (struct lsqpack_enc *enc, unsigned char *buf, size_t sz)
     lsqpack_abs_id_t diff, encoded_largest_ref;
     unsigned sign;
 
+    if (sz == 0)
+        return -1;
+
     if (!(enc->qpe_flags & LSQPACK_ENC_HEADER))
         return -1;
 
@@ -3311,6 +3314,7 @@ parse_header_data (struct lsqpack_dec *dec,
             {
                 prefix_bits = 3;
                 LFPBNR.is_never = buf[0] & 0x08;
+                LFPBNR.dec_int_state.resume = 0;
                 LFPBNR.value = NULL;
                 LFPBNR.reffed_entry = NULL;
                 read_ctx->hbrc_parse_ctx_u.data.state

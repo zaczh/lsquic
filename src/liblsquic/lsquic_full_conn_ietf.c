@@ -1359,7 +1359,6 @@ service_streams (struct ietf_full_conn *conn)
 {
     struct lsquic_hash_elem *el;
     lsquic_stream_t *stream, *next;
-    unsigned n_our_destroyed = 0;
 
     for (stream = TAILQ_FIRST(&conn->ifc_pub.service_streams); stream;
                                                                 stream = next)
@@ -1374,7 +1373,6 @@ service_streams (struct ietf_full_conn *conn)
             lsquic_stream_call_on_close(stream);
         if (stream->sm_qflags & SMQF_FREE_STREAM)
         {
-            n_our_destroyed += is_our_stream(conn, stream);
             TAILQ_REMOVE(&conn->ifc_pub.service_streams, stream, next_service_stream);
             el = lsquic_hash_find(conn->ifc_pub.all_streams, &stream->id, sizeof(stream->id));
             if (el)
@@ -1393,7 +1391,7 @@ service_streams (struct ietf_full_conn *conn)
             (void) conn->ifc_enpub->enp_stream_if->on_new_stream(
                                     conn->ifc_enpub->enp_stream_if_ctx, NULL);
         }
-    else if ((conn->ifc_flags & (IFC_HTTP|IFC_HAVE_PEER_SET)) != IFC_HTTP)
+    else
         maybe_create_delayed_streams(conn);
 }
 
@@ -1733,8 +1731,7 @@ handshake_ok (struct lsquic_conn *lconn)
     if ((1 << conn->ifc_conn.cn_n_cces) - 1 != conn->ifc_conn.cn_cces_mask
             && CN_SCID(&conn->ifc_conn)->len != 0)
         conn->ifc_send_flags |= SF_SEND_NEW_CID;
-    if ((conn->ifc_flags & (IFC_HTTP|IFC_HAVE_PEER_SET)) != IFC_HTTP)
-        maybe_create_delayed_streams(conn);
+    maybe_create_delayed_streams(conn);
 
     return 0;
 }
@@ -4209,7 +4206,6 @@ ietf_full_conn_ci_make_stream (struct lsquic_conn *lconn)
     struct ietf_full_conn *const conn = (struct ietf_full_conn *) lconn;
 
     if ((lconn->cn_flags & LSCONN_HANDSHAKE_DONE)
-        && (conn->ifc_flags & (IFC_HTTP|IFC_HAVE_PEER_SET)) != IFC_HTTP
         && ietf_full_conn_ci_n_avail_streams(lconn) > 0)
     {
         if (0 != create_bidi_stream_out(conn))

@@ -2450,12 +2450,10 @@ lsquic_send_ctl_mem_used (const struct lsquic_send_ctl *ctl)
 void
 lsquic_send_ctl_verneg_done (struct lsquic_send_ctl *ctl)
 {
-    if ((1 << ctl->sc_conn_pub->lconn->cn_version) &
-                        (LSQUIC_GQUIC_HEADER_VERSIONS|LSQUIC_IETF_VERSIONS))
-        ctl->sc_max_packno_bits = PACKNO_BITS_3;
-    else
-        /* Assuming Q044 */
+    if (ctl->sc_conn_pub->lconn->cn_version == LSQVER_044)
         ctl->sc_max_packno_bits = PACKNO_BITS_2;
+    else
+        ctl->sc_max_packno_bits = PACKNO_BITS_3;
     LSQ_DEBUG("version negotiation done (%s): max packno bits: %u",
         lsquic_ver2str[ ctl->sc_conn_pub->lconn->cn_version ],
         ctl->sc_max_packno_bits);

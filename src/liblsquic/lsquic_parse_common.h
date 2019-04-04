@@ -30,6 +30,11 @@ lsquic_Q044_parse_packet_in_begin (struct lsquic_packet_in *,
             struct packin_parse_state *);
 
 int
+lsquic_Q046_parse_packet_in_begin (struct lsquic_packet_in *,
+            size_t length, int is_server, unsigned cid_len,
+            struct packin_parse_state *);
+
+int
 lsquic_ID18_parse_packet_in_long_begin (struct lsquic_packet_in *,
             size_t length, int is_server, unsigned cid_len,
             struct packin_parse_state *);

@@ -52,7 +52,10 @@ static void
 id18_parse_packet_in_finish (lsquic_packet_in_t *packet_in,
                                             struct packin_parse_state *state)
 {
-    /* Packet number is encrypted... */
+    /* Packet number is set to an invalid value.  The packet number must
+     * be decrypted, which happens later.
+     */
+    packet_in->pi_packno        = 1ULL << 62;
 }
 
 
@@ -1682,13 +1685,18 @@ lsquic_ID18_parse_packet_in_short_begin (struct lsquic_packet_in *packet_in,
     /* [draft-ietf-quic-transport-17] Section 17.3 */
     /* 01SRRKPP */
 
-    header_sz = 1 + cid_len;
-    if (length < header_sz)
-        return -1;
+    if (cid_len)
+    {
+        header_sz = 1 + cid_len;
+        if (length < header_sz)
+            return -1;
+        memcpy(packet_in->pi_dcid.idbuf, packet_in->pi_data + 1, cid_len);
+        packet_in->pi_dcid.len = cid_len;
+        packet_in->pi_flags |= PI_CONN_ID;
+    }
+    else
+        header_sz = 1;
 
-    memcpy(packet_in->pi_dcid.idbuf, packet_in->pi_data + 1, cid_len);
-    packet_in->pi_dcid.len = cid_len;
-    packet_in->pi_flags |= PI_CONN_ID;
     packet_in->pi_flags |= ((byte & 0x04) > 0) << PIBIT_KEY_PHASE_SHIFT;
     packet_in->pi_flags |= ((byte & 0x20) > 0) << PIBIT_SPIN_SHIFT;
 
@@ -1702,10 +1710,9 @@ lsquic_ID18_parse_packet_in_short_begin (struct lsquic_packet_in *packet_in,
     packet_in->pi_refcnt        = 0;
     packet_in->pi_received      = 0;
 
-    /* Packet number is set to an invalid value.  The packet number must
-     * be decrypted, which happens later.
-     */
-    packet_in->pi_packno        = 1ULL << 62;
+    /* This is so that Q046 works, ID-18 code does not use it */
+    state->pps_p                = packet_in->pi_data + header_sz;
+    state->pps_nbytes           = 1 + (byte & 3);
 
     return 0;
 }

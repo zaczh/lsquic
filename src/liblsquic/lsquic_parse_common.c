@@ -17,7 +17,7 @@
 
 
 
-/* This function does not support Q044 */
+/* This function does not support Q044 and Q046 */
 int
 lsquic_parse_packet_in_begin (lsquic_packet_in_t *packet_in, size_t length,
             int is_server, unsigned cid_len, struct packin_parse_state *state)
@@ -26,6 +26,7 @@ lsquic_parse_packet_in_begin (lsquic_packet_in_t *packet_in, size_t length,
     {
         switch (packet_in->pi_data[0] & 0xC0)
         {
+        /* XXX Revisit this: does this logic check out? */
         case 0xC0:
         case 0x80:
             return lsquic_ID18_parse_packet_in_long_begin(packet_in,
@@ -74,6 +75,27 @@ lsquic_Q044_parse_packet_in_begin (struct lsquic_packet_in *packet_in,
         if (0 == (packet_in->pi_data[0] & 0x80))
             return lsquic_Q044_parse_packet_in_short_begin(packet_in, length,
                                                     is_server, cid_len, state);
+        else
+            return lsquic_Q044_parse_packet_in_long_begin(packet_in, length,
+                                                    is_server, cid_len, state);
+    }
+    else
+        return -1;
+}
+
+
+int
+lsquic_Q046_parse_packet_in_begin (struct lsquic_packet_in *packet_in,
+            size_t length, int is_server, unsigned cid_len,
+            struct packin_parse_state *state)
+{
+    assert(!is_server);
+    assert(cid_len == GQUIC_CID_LEN);
+    if (length > 0)
+    {
+        if (0 == (packet_in->pi_data[0] & 0x80))
+            return lsquic_ID18_parse_packet_in_short_begin(packet_in, length,
+                                    is_server, is_server ? cid_len : 0, state);
         else
             return lsquic_Q044_parse_packet_in_long_begin(packet_in, length,
                                                     is_server, cid_len, state);

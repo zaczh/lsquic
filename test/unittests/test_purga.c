@@ -13,8 +13,10 @@
 
 #define MIN_CID_LEN 4
 
+static int s_eight;
+
 static void
-bloom_test (unsigned count, unsigned searches)
+bloom_test (unsigned count, unsigned miss_searches, unsigned hit_searches)
 {
     struct lsquic_purga *purga;
     struct purga_bloom_stats *stats;
@@ -27,7 +29,7 @@ bloom_test (unsigned count, unsigned searches)
 
     for (i = 0; i < count; ++i)
     {
-        cids[i].len = MIN_CID_LEN + rand() % (MAX_CID_LEN - MIN_CID_LEN);
+        cids[i].len = s_eight ? 8 : MIN_CID_LEN + rand() % (MAX_CID_LEN - MIN_CID_LEN);
         RAND_bytes(cids[i].idbuf, cids[i].len);
     }
 
@@ -44,10 +46,18 @@ bloom_test (unsigned count, unsigned searches)
         assert(puel);
     }
 
-    /* Generate random CIDs and check that they are not found: */
-    for (i = 0; i < searches; ++i)
+    /* Run hit searches */
+    for (i = 0; i < hit_searches; ++i)
     {
-        cid.len = MIN_CID_LEN + rand() % (MAX_CID_LEN - MIN_CID_LEN);
+        j = rand() % count;
+        puel = lsquic_purga_contains(purga, &cids[j]);
+        assert(puel);
+    }
+
+    /* Generate random CIDs and check that they are not found: */
+    for (i = 0; i < miss_searches; ++i)
+    {
+        cid.len = s_eight ? 8 : MIN_CID_LEN + rand() % (MAX_CID_LEN - MIN_CID_LEN);
         RAND_bytes(cid.idbuf, cid.len);
         puel = lsquic_purga_contains(purga, &cid);
         if (puel)
@@ -73,20 +83,26 @@ int
 main (int argc, char **argv)
 {
     int opt;
-    unsigned i, per_page, bloom_ins = 0, bloom_sea = 0;
+    unsigned i, per_page, bloom_ins = 0, bloom_miss_sea = 0, bloom_hit_sea = 0;
     lsquic_cid_t cid;
     struct lsquic_purga *purga;
     struct purga_el *puel;
 
-    while (-1 != (opt = getopt(argc, argv, "b:l:s:v")))
+    while (-1 != (opt = getopt(argc, argv, "b:h:l:s:v8")))
     {
         switch (opt)
         {
+        case '8':
+            s_eight = 1;
+            break;
         case 'b':
             bloom_ins = atoi(optarg);
             break;
         case 's':
-            bloom_sea = atoi(optarg);
+            bloom_miss_sea = atoi(optarg);
+            break;
+        case 'h':
+            bloom_hit_sea = atoi(optarg);
             break;
         case 'l':
             lsquic_log_to_fstream(stderr, 0);
@@ -103,11 +119,9 @@ main (int argc, char **argv)
 
     if (bloom_ins)
     {
-        if (!bloom_sea)
-            bloom_sea = bloom_ins * 10;
-        LSQ_NOTICE("bloom test: will insert %u and search for %u CIDs",
-                                                        bloom_ins, bloom_sea);
-        bloom_test(bloom_ins, bloom_sea);
+        LSQ_NOTICE("bloom test: will insert %u and search for %u missing "
+            "and %u extant CIDs", bloom_ins, bloom_miss_sea, bloom_hit_sea);
+        bloom_test(bloom_ins, bloom_miss_sea, bloom_hit_sea);
         exit(EXIT_SUCCESS);
     }
 
@@ -123,7 +137,7 @@ main (int argc, char **argv)
         cid.idbuf[2] = i;
         puel = lsquic_purga_add(purga, &cid, NULL, PUTY_CONN_DELETED, 20);
         assert(puel);
-        lsquic_purga_el_set_data(puel, ~i);
+        puel->puel_time = ~i;
     }
 
     for (i = 0; i < per_page; ++i)
@@ -132,8 +146,8 @@ main (int argc, char **argv)
         cid.idbuf[1] = i >> 8;
         cid.idbuf[2] = i;
         puel = lsquic_purga_contains(purga, &cid);
-        assert(puel && PUTY_CONN_DELETED == lsquic_purga_el_get_type(puel));
-        assert(~i == lsquic_purga_el_get_data(puel));
+        assert(puel && PUTY_CONN_DELETED == puel->puel_type);
+        ~i == puel->puel_time;
     }
 
     ++cid.idbuf[1];
@@ -150,11 +164,11 @@ main (int argc, char **argv)
 
     ++cid.idbuf[1];
     puel = lsquic_purga_contains(purga, &cid);
-    assert(puel && PUTY_CONN_DELETED == lsquic_purga_el_get_type(puel));
+    assert(puel && PUTY_CONN_DELETED == puel->puel_type);
 
     lsquic_purga_destroy(purga);
 
-    bloom_test(20000, 200000);
+    bloom_test(20000, 200000, 2000);
 
     exit(EXIT_SUCCESS);
 }

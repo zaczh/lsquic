@@ -24,8 +24,8 @@ extern "C" {
 #endif
 
 #define LSQUIC_MAJOR_VERSION 1
-#define LSQUIC_MINOR_VERSION 19
-#define LSQUIC_PATCH_VERSION 6
+#define LSQUIC_MINOR_VERSION 20
+#define LSQUIC_PATCH_VERSION 0
 
 /**
  * Engine flags:
@@ -103,6 +103,11 @@ enum lsquic_version
      */
     LSQVER_044,
 
+    /**
+     * Q046.  Use IETF Draft-17 compatible packet headers.
+     */
+    LSQVER_046,
+
 #if LSQUIC_USE_Q098
     /**
      * Q098.  This is a made-up, experimental version used to test version
@@ -130,7 +135,7 @@ enum lsquic_version
 };
 
 /**
- * We currently support versions 35, 39, 43, 44, and IETF Draft-18
+ * We currently support versions 35, 39, 43, 44, 46, and IETF Draft-18
  * @see lsquic_version
  */
 #define LSQUIC_SUPPORTED_VERSIONS ((1 << N_LSQVER) - 1)
@@ -138,7 +143,7 @@ enum lsquic_version
 /**
  * List of versions in which the server never includes CID in short packets.
  */
-#define LSQUIC_FORCED_TCID0_VERSIONS (1 << LSQVER_044)
+#define LSQUIC_FORCED_TCID0_VERSIONS ((1 << LSQVER_044) | (1 << LSQVER_046))
 
 #define LSQUIC_EXPERIMENTAL_VERSIONS ( \
                             (1 << LSQVER_VERNEG) | LSQUIC_EXPERIMENTAL_Q098)
@@ -437,8 +442,8 @@ struct lsquic_engine_settings {
      * (source-addr, dest-addr) tuple, thereby making it necessary to create
      * a socket for each connection.
      *
-     * This option has no effect in Q044, as the server never includes CIDs
-     * in the short packets.
+     * This option has no effect in Q044 or Q046, as the server never includes
+     * CIDs in the short packets.
      *
      * The default is @ref LSQUIC_DF_SUPPORT_TCID0.
      */

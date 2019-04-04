@@ -1011,7 +1011,7 @@ const struct parse_funcs lsquic_parse_funcs_gquic_Q039 =
     .pf_parse_frame_type              =  parse_frame_type_gquic_Q035_thru_Q039,
     .pf_turn_on_fin                   =  lsquic_turn_on_fin_Q035_thru_Q039,
     .pf_packout_size                  =  lsquic_gquic_packout_size,
-    .pf_packout_max_header_size           =  lsquic_gquic_packout_header_size,
+    .pf_packout_max_header_size       =  lsquic_gquic_packout_header_size,
     .pf_calc_packno_bits              =  lsquic_gquic_calc_packno_bits,
     .pf_packno_bits2len               =  lsquic_gquic_packno_bits2len,
 };

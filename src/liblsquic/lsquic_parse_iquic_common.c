@@ -30,7 +30,7 @@
 #include "lsquic_engine_public.h"
 
 
-static const enum header_type bin_2_header_type[0x100] =
+static const enum header_type bin_2_header_type_Q044[0x100] =
 {
     [0x80 | 0x7F]  =  HETY_INITIAL,
     [0x80 | 0x7E]  =  HETY_RETRY,
@@ -39,6 +39,17 @@ static const enum header_type bin_2_header_type[0x100] =
 };
 
 
+/* [draft-ietf-quic-transport-17] Section-17.2 */
+static const enum header_type bits2ht[4] =
+{
+    [0] = HETY_INITIAL,
+    [1] = HETY_0RTT,
+    [2] = HETY_HANDSHAKE,
+    [3] = HETY_RETRY,
+};
+
+
+/* This function supports versions Q044 and higher */
 int
 lsquic_Q044_parse_packet_in_long_begin (struct lsquic_packet_in *packet_in,
                 size_t length, int is_server, unsigned cid_len,
@@ -48,8 +59,9 @@ lsquic_Q044_parse_packet_in_long_begin (struct lsquic_packet_in *packet_in,
     const unsigned char *const end = p + length;
     lsquic_ver_tag_t tag;
     enum header_type header_type;
-    unsigned dcil, scil;
+    unsigned dcil, scil, packet_len;
     int verneg;
+    enum lsquic_version version;
     unsigned char first_byte;
     lsquic_packno_t packno;
 
@@ -62,9 +74,15 @@ lsquic_Q044_parse_packet_in_long_begin (struct lsquic_packet_in *packet_in,
     verneg = 0 == tag;
     if (!verneg)
     {
-        header_type = bin_2_header_type[ first_byte ];
-        if (!header_type)
-            return -1;
+        version = lsquic_tag2ver(tag);
+        if (version == LSQVER_044)
+        {
+            header_type = bin_2_header_type_Q044[ first_byte ];
+            if (!header_type)
+                return -1;
+        }
+        else
+            header_type = bits2ht[ (first_byte >> 4) & 3 ];
     }
     else
         header_type = HETY_VERNEG;
@@ -86,13 +104,27 @@ lsquic_Q044_parse_packet_in_long_begin (struct lsquic_packet_in *packet_in,
     if (!(dcil == 0 && scil == cid_len))
         return -1;
 
-    const unsigned packet_len = 4;
-    /* This checks both packet length or the first version of the version
-     * array in a version negotiation packet.  This is because the sizes of
-     * the packet number field and the version tag are the same.
-     */
-    if (end - p < (ptrdiff_t) (cid_len + packet_len))
-        return -1;
+    if (!verneg)
+    {
+        if (version == LSQVER_044)
+        {
+            packet_in->pi_flags |= GQUIC_PACKNO_LEN_4 << PIBIT_BITS_SHIFT;
+            packet_len = 4;
+        }
+        else
+        {
+            packet_in->pi_flags |= (first_byte & 3) << PIBIT_BITS_SHIFT;
+            packet_len = 1 + (first_byte & 3);
+        }
+        if (end - p < (ptrdiff_t) (dcil + scil + packet_len))
+            return -1;
+    }
+    else
+    {
+        /* Need at least one version in the version array: add 4 */
+        if (end - p < (ptrdiff_t) (dcil + scil + 4))
+            return -1;
+    }
 
     memcpy(&packet_in->pi_dcid.idbuf, p, cid_len);
     packet_in->pi_dcid.len = cid_len;
@@ -141,8 +173,14 @@ lsquic_Q044_parse_packet_in_short_begin (lsquic_packet_in_t *packet_in,
     unsigned packet_len, header_len;
     lsquic_packno_t packno;
 
-    if ((*p & 0x30) != 0x30 || (*p & 3) == 3)
-        return -1;
+    if (*p & 0x40)  /* Q046 and higher */
+        packet_len = 1 + (*p & 3);
+    else
+    {
+        if ((*p & 0x30) != 0x30 || (*p & 3) == 3)
+            return -1;
+        packet_len = 1 << (*p & 3);
+    }
 
     packet_len = 1 << (*p & 3);
 
@@ -151,6 +189,7 @@ lsquic_Q044_parse_packet_in_short_begin (lsquic_packet_in_t *packet_in,
     if (pend - p < (ptrdiff_t) header_len)
         return -1;
 
+    packet_in->pi_flags |= (*p & 3) << PIBIT_BITS_SHIFT;
     ++p;
 
     READ_UINT(packno, 64, p, packet_len);

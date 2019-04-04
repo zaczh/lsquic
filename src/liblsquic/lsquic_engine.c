@@ -481,8 +481,6 @@ update_stats_sum (struct lsquic_engine *engine, struct lsquic_conn *conn)
 #endif
 
 
-
-
 /* Wrapper to make sure important things occur before the connection is
  * really destroyed.
  */
@@ -1655,15 +1653,17 @@ lsquic_engine_packet_in (lsquic_engine_t *engine,
             parse_packet_in_begin = lsquic_gquic_parse_packet_in_begin;
         else if ((1 << conn->cn_version) & LSQUIC_IETF_VERSIONS)
             parse_packet_in_begin = lsquic_ID18_parse_packet_in_begin;
+        else if (conn->cn_version == LSQVER_044)
+            parse_packet_in_begin = lsquic_Q044_parse_packet_in_begin;
         else
         {
-            assert(conn->cn_version == LSQVER_044
+            assert(conn->cn_version == LSQVER_046
 #if LSQUIC_USE_Q098
                    || conn->cn_version == LSQVER_098
 #endif
 
                                                     );
-            parse_packet_in_begin = lsquic_Q044_parse_packet_in_begin;
+            parse_packet_in_begin = lsquic_Q046_parse_packet_in_begin;
         }
     }
     else

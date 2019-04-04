@@ -3510,19 +3510,8 @@ hq_read (void *ctx, const unsigned char *buf, size_t sz, int fin)
         case HQFI_STATE_READING_SIZE_CONTINUE:
             if (0 == lsquic_varint_read_nb(&p, end, &filter->hqfi_vint_state))
             {
-                if (filter->hqfi_left > 0)
-                {
-                    filter->hqfi_state = HQFI_STATE_READING_TYPE;
-                    break;
-                }
-                else
-                {
-                    LSQ_INFO("HQ frame at offset %"PRIu64" has size 0: error",
-                        stream->read_offset + (unsigned) (p - buf));
-                    filter->hqfi_flags |= HQFI_FLAG_ERROR;
-                    abort_connection(stream);
-                    goto end;
-                }
+                filter->hqfi_state = HQFI_STATE_READING_TYPE;
+                break;
             }
             else
             {
@@ -3536,10 +3525,34 @@ hq_read (void *ctx, const unsigned char *buf, size_t sz, int fin)
             LSQ_DEBUG("HQ frame type 0x%X at offset %"PRIu64", size %"PRIu64,
                 filter->hqfi_type, stream->read_offset + (unsigned) (p - buf),
                 filter->hqfi_left);
-            if (filter->hqfi_type == HQFT_DATA)
-                goto end;
+            if (filter->hqfi_left > 0)
+            {
+                if (filter->hqfi_type == HQFT_DATA)
+                    goto end;
+            }
             else
-                break;
+            {
+                switch (filter->hqfi_type)
+                {
+                case HQFT_CANCEL_PUSH:
+                case HQFT_GOAWAY:
+                case HQFT_HEADERS:
+                case HQFT_MAX_PUSH_ID:
+                case HQFT_PRIORITY:
+                case HQFT_PUSH_PROMISE:
+                case HQFT_SETTINGS:
+                    filter->hqfi_flags |= HQFI_FLAG_ERROR;
+                    LSQ_INFO("HQ frame of type %u cannot be size 0",
+                                                            filter->hqfi_type);
+                    abort_connection(stream);   /* XXX Overkill? */
+                    goto end;
+                default:
+                    filter->hqfi_flags &= ~HQFI_FLAG_BEGIN;
+                    filter->hqfi_state = HQFI_STATE_READING_SIZE_BEGIN;
+                    break;
+                }
+            }
+            break;
         case HQFI_STATE_READING_PAYLOAD:
             if (filter->hqfi_type == HQFT_DATA)
                 goto end;

@@ -70,6 +70,9 @@ typedef struct lsquic_packet_in
         PI_ECN_BIT_1    = (1 <<10),
 #define PIBIT_SPIN_SHIFT 11
         PI_SPIN_BIT     = (1 <<11),
+#define PIBIT_BITS_SHIFT 12
+        PI_BITS_BIT_0   = (1 <<12),
+        PI_BITS_BIT_1   = (1 <<13),
     }                               pi_flags:16;
     /* pi_token and pi_token_size are set in Initial and Retry packets */
     unsigned short                  pi_token_size; /* Size of the token */
@@ -97,12 +100,8 @@ typedef struct lsquic_packet_in
         lsquic_packet_in_public_flags(p) & PACKET_PUBLIC_FLAGS_VERSION : \
         (p)->pi_header_type == HETY_VERNEG)
 
-/* The non-GQUIC branch covers Q044 */
-#define gquic_packet_in_packno_bits(p) \
-    (((p)->pi_flags & PI_GQUIC) ? \
-                    ((lsquic_packet_in_public_flags(p) >> 4) & 3) : \
-                    ((p)->pi_header_type == HETY_NOT_SET ? \
-                    ((p)->pi_data[0] & 3) : GQUIC_PACKNO_LEN_4))
+#define lsquic_packet_in_packno_bits(p) \
+                        (((p)->pi_flags >> PIBIT_BITS_SHIFT) & 3)
 
 #define lsquic_packet_in_upref(p) (++(p)->pi_refcnt)
 

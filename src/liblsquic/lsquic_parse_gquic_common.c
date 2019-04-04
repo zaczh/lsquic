@@ -146,6 +146,7 @@ lsquic_gquic_parse_packet_in_begin (lsquic_packet_in_t *packet_in,
     packet_in->pi_refcnt       = 0;
     packet_in->pi_received     = 0;
     packet_in->pi_flags       |= PI_GQUIC;
+    packet_in->pi_flags       |= ((public_flags >> 4) & 3) << PIBIT_BITS_SHIFT;
 
     return 0;
 }

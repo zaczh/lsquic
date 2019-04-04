@@ -91,7 +91,7 @@ enum PACKET_PUBLIC_FLAGS
 
 lsquic_packno_t
 restore_packno (lsquic_packno_t cur_packno,
-                enum packno_bits cur_packno_bits,
+                unsigned packet_len,
                 lsquic_packno_t max_packno);
 
 #endif

@@ -9,14 +9,13 @@
 
 lsquic_packno_t
 restore_packno (lsquic_packno_t cur_packno,
-                enum packno_bits cur_packno_bits,
+                unsigned len,
                 lsquic_packno_t max_packno)
 {
     lsquic_packno_t candidates[3], epoch_delta;
     int64_t diffs[3];
-    unsigned min, len;
+    unsigned min;
 
-    len = gquic_packno_bits2len(cur_packno_bits);
     epoch_delta = 1ULL << (len << 3);
     candidates[1] = (max_packno & ~(epoch_delta - 1)) + cur_packno;
     candidates[0] = candidates[1] - epoch_delta;
